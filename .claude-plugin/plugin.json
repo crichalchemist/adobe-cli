@@ -1,0 +1,18 @@
+{
+  "name": "adobe-cli",
+  "description": "Drive Adobe Premiere Pro 2025, Illustrator 2026, and Acrobat DC from scripts and AI agents without touching a mouse.",
+  "version": "1.0.0",
+  "author": {
+    "name": "adobe-cli contributors"
+  },
+  "license": "EL2",
+  "keywords": [
+    "adobe",
+    "premiere-pro",
+    "illustrator",
+    "acrobat",
+    "automation",
+    "cli",
+    "agents"
+  ]
+}

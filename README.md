@@ -2,7 +2,7 @@
 
 Command-line harnesses for Adobe desktop applications. AI agents and shell scripts can open projects, inspect timelines, manipulate documents, and trigger exports — without touching a mouse.
 
-Built on the **cli-anything** methodology: a pattern for wrapping stateful GUI applications behind a local HTTP bridge that any script or agent can call.
+Built on the **[CLI-Anything](https://github.com/HKUDS/CLI-Anything)** methodology by [HKUDS](https://github.com/HKUDS): a pattern for wrapping stateful GUI applications behind a local HTTP or IPC bridge so scripts and AI agents can drive them programmatically.
 
 > **Not affiliated with Adobe Inc.** This project is an independent, community-built tool. Adobe, Acrobat, and Premiere Pro are trademarks of Adobe Inc. Use of those names here is purely descriptive.
 
@@ -14,6 +14,7 @@ Built on the **cli-anything** methodology: a pattern for wrapping stateful GUI a
 |---------|-------------|--------|
 | [`cli-anything-premierepro`](premiere-pro/agent-harness/) | Adobe Premiere Pro 2025 | CEP panel → ExtendScript |
 | [`cli-anything-acrobat`](acrobat/agent-harness/) | Adobe Acrobat DC | Acrobat JS via `osascript` |
+| [`cli-anything-illustrator`](illustrator/agent-harness/) | Adobe Illustrator 2026 | `osascript do javascript` + `#include` |
 
 ---
 
@@ -92,6 +93,62 @@ Run `cli-anything-premierepro` with no arguments to enter the interactive REPL.
 
 ---
 
+## cli-anything-illustrator
+
+Drive Illustrator 2026 from scripts or agents: inspect documents, enumerate layers and artboards, list page items and text frames, query swatches, and export artwork as PNG, JPEG, SVG, or PDF — no CEP extension required.
+
+### Requirements
+
+- macOS (Ventura / Sonoma)
+- Adobe Illustrator 2026 (version 30.x)
+- Python 3.10+
+
+### Install
+
+```bash
+pipx install -e illustrator/agent-harness/
+```
+
+### Usage
+
+```bash
+# Health check
+cli-anything-illustrator ping
+
+# Document
+cli-anything-illustrator document info
+cli-anything-illustrator document open /path/to/file.ai
+
+# Layers
+cli-anything-illustrator layer list
+cli-anything-illustrator layer visible "Artwork" off
+
+# Artboards
+cli-anything-illustrator artboard list
+cli-anything-illustrator artboard set-active 1
+
+# Objects & selection
+cli-anything-illustrator object list --layer "Artwork"
+cli-anything-illustrator object selection
+
+# Text frames
+cli-anything-illustrator text list
+cli-anything-illustrator text set 0 "New headline"
+
+# Swatches
+cli-anything-illustrator swatch list
+
+# Export
+cli-anything-illustrator export png /tmp/out.png --resolution 300
+cli-anything-illustrator export jpeg /tmp/out.jpg --artboard 0 --quality 9
+cli-anything-illustrator export svg /tmp/out.svg
+cli-anything-illustrator export pdf /tmp/out.pdf
+```
+
+Use `--json` anywhere for machine-readable output. Run `cli-anything-illustrator` with no arguments for the REPL.
+
+---
+
 ## cli-anything-acrobat
 
 Perform PDF operations from scripts or agents: format conversion, page manipulation, merge, split, and metadata — using Acrobat's native engine.
@@ -141,6 +198,8 @@ Use `--json` for machine-readable output. Run `cli-anything-acrobat` with no arg
 ---
 
 ## The cli-anything Pattern
+
+> **Attribution:** The cli-anything pattern was created by [HKUDS](https://github.com/HKUDS) — see [CLI-Anything: Making ALL Software Agent-Native](https://github.com/HKUDS/CLI-Anything). Browse and install community CLIs via the [CLI Hub](https://hkuds.github.io/CLI-Anything/) (`pip install cli-anything-hub`).
 
 Each harness follows the same structure:
 

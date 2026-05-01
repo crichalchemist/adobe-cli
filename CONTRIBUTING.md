@@ -4,7 +4,9 @@ Contributions welcome. This document covers the conventions and workflow for add
 
 ## What This Project Is
 
-`adobe-cli` implements the **cli-anything** pattern: wrapping stateful GUI desktop applications behind a local HTTP or IPC bridge so that scripts and AI agents can drive them programmatically. Each Adobe application gets its own Python package under the `cli_anything.*` namespace.
+`adobe-cli` implements the **[CLI-Anything](https://github.com/HKUDS/CLI-Anything)** pattern by [HKUDS](https://github.com/HKUDS): wrapping stateful GUI desktop applications behind a local HTTP or IPC bridge so that scripts and AI agents can drive them programmatically. Each Adobe application gets its own Python package under the `cli_anything.*` namespace.
+
+The upstream project defines the methodology, directory conventions, and namespace package structure used here. If you build a harness worth sharing, consider submitting it to the [CLI Hub](https://hkuds.github.io/CLI-Anything/).
 
 ## Conventions
 

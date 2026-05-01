@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# hooks/session-start.sh
+# Injects adobe-cli skills into Claude Code on session start.
+# Claude Code automatically executes hooks/* scripts and captures JSON output.
+
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Output JSON with skill metadata for Claude Code skill discovery
+cat <<'EOF'
+{
+  "skills": [
+    {
+      "name": "adobe-cli",
+      "path": "skills/SKILL.md",
+      "description": "Use when driving any Adobe desktop application from scripts or agents. Routes to the appropriate sub-skill: Premiere Pro 2025 (timeline, sequences, markers, AME export, vision), Illustrator 2026 (documents, layers, artboards, objects, text, swatches, export), or Acrobat DC (PDF conversion, page manipulation, merge, split, metadata). Each sub-skill specifies its own runtime requirements."
+    },
+    {
+      "name": "cli-anything-premierepro",
+      "path": "premiere-pro/agent-harness/cli_anything/premierepro/skills/SKILL.md",
+      "description": "Use when driving Adobe Premiere Pro 2025 from scripts or agents — opening projects, inspecting sequences and timelines, managing markers, queuing AME exports, capturing timeline frames, or reading media metadata. Most commands require Premiere Pro running with the cli-anything CEP bridge. Use `project parse` or `media` for offline operations without Premiere open."
+    },
+    {
+      "name": "cli-anything-illustrator",
+      "path": "illustrator/agent-harness/cli_anything/illustrator/skills/SKILL.md",
+      "description": "Use when driving Adobe Illustrator 2026 from scripts or agents — inspecting documents, layers, artboards, page items, text frames, and swatches, or exporting artwork as PNG, JPEG, SVG, or PDF. Requires Illustrator running with a document open; the bridge is `osascript do javascript` (no CEP panel needed). All commands require Illustrator to be running."
+    },
+    {
+      "name": "cli-anything-acrobat",
+      "path": "acrobat/agent-harness/cli_anything/acrobat/skills/SKILL.md",
+      "description": "Adobe Acrobat DC command-line interface for PDF operations: format conversion (PDF→DOCX/XLSX/PPTX/PNG/etc.), page manipulation (delete/extract/rotate/reorder), merge, split, metadata, and text extraction. Requires Adobe Acrobat DC installed. Uses Acrobat's native engine for conversion; pypdf/PyMuPDF for headless operations."
+    }
+  ]
+}
+EOF
