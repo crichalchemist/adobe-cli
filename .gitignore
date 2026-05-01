@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.so
+*.dylib
+
+# pip editable install artifacts
+pip-wheel-metadata/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+
+# temp files
+/tmp/
+*.log
+
+# IDE
+.vscode/
+.idea/
