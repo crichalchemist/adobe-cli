@@ -1,31 +1,26 @@
 {
-  "name": "adobe-cli-marketplace",
-  "description": "Marketplace for Adobe desktop application automation plugins: Premiere Pro 2025, Illustrator 2026, and Acrobat DC CLI harnesses",
+  "name": "artcraft-cli-marketplace",
+  "description": "Marketplace for artcraft-cli, a CLI and agent skill for the ArtCraft desktop app",
   "owner": {
     "name": "crichalchemist",
     "email": "crichalchemist@gmail.com"
   },
   "plugins": [
     {
-      "name": "adobe-cli",
-      "description": "Drive Adobe Premiere Pro 2025, Illustrator 2026, and Acrobat DC from scripts and AI agents without touching a mouse.",
-      "version": "1.0.0",
+      "name": "artcraft-cli",
+      "description": "Drive a locally running ArtCraft desktop app (image, video, audio and 3D generation, jobs, media) from scripts and AI agents.",
+      "version": "0.1.0",
       "source": "./",
       "author": {
-        "name": "adobe-cli contributors"
+        "name": "artcraft-cli contributors"
       },
-      "license": "EL2",
+      "license": "Elastic-2.0",
       "keywords": [
-        "adobe",
-        "premiere-pro",
-        "illustrator",
-        "acrobat",
+        "artcraft",
+        "generative-ai",
         "automation",
         "cli",
-        "agents",
-        "video-editing",
-        "pdf",
-        "design"
+        "agents"
       ]
     }
   ]
