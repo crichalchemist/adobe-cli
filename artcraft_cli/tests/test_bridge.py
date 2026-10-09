@@ -20,7 +20,7 @@ import urllib3
 from artcraft_cli.errors import CliError
 from artcraft_cli.utils import bridge
 
-from .conftest import HEALTH, FakeBridge, FakeClock, op_error, refused, write_discovery
+from .conftest import HEALTH, TOKEN, FakeBridge, FakeClock, op_error, refused, write_discovery
 
 _real_session: Callable[[], requests.Session] = bridge._session  # before any patching
 SUBMIT_ARGS = {
@@ -162,6 +162,39 @@ def test_proxy_env_vars_never_route_bridge_traffic(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_token_never_appears_in_stdout_stderr_or_exceptions(
+    fake_bridge: FakeBridge, run: Callable[..., tuple[int, str, str]]
+) -> None:
+    fake_bridge.on("health", HEALTH)
+    fake_bridge.on("app.info", op_error("unauthorized", status=401))
+    fake_bridge.on("jobs.list", refused())
+    fake_bridge.on("models.list", requests.ReadTimeout())
+    fake_bridge.on("account.session", requests.ConnectionError("dropped"))
+
+    outputs: list[str] = []
+    for argv in (
+        ["ping"],
+        ["--json", "ping"],
+        ["app", "info"],
+        ["--json", "jobs", "list"],
+        ["models", "list", "--kind", "image"],
+        ["--json", "account", "whoami"],
+    ):
+        _, out, err = run(*argv)
+        outputs += [out, err]
+    failing_ops: list[tuple[str, dict[str, Any]]] = [
+        ("app.info", {}),
+        ("jobs.list", {}),
+        ("models.list", {"kind": "image"}),
+    ]
+    for op, args in failing_ops:
+        with pytest.raises(CliError) as caught:
+            bridge.rpc(op, args)
+        outputs += [str(caught.value), repr(caught.value), json.dumps(caught.value.details)]
+
+    assert all(TOKEN not in text for text in outputs)
 
 
 def test_credentials_not_synced_is_retried_briefly_then_surfaced(
