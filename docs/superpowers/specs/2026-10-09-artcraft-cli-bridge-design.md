@@ -69,7 +69,8 @@ All of these were verified against ArtCraft `3e5793b` and pinned `tauri-2.11.2`.
 **Task database**
 - It is SQLite at `~/Artcraft/state/tasks_v7.sqlite`.
 - It is recreated on migration failure or a schema bump.
-- Only these statuses are ever written: `pending`, `complete_success`, `complete_failure`, `cancelled_by_user`.
+- The local `TaskStatus` enum has 9 variants (`enums/src/tauri/tasks/task_status.rs:14–22`): `pending`, `started`, `complete_success`, `complete_failure`, `attempt_failed`, `dead`, `cancelled_by_user`, `cancelled_by_provider`, `cancelled_by_us`. It has no `Unknown` variant.
+- Only these are currently written: `pending`, `complete_success`, `complete_failure`, `cancelled_by_user`.
 - `updated_at` and `completed_at` are never updated.
 - The local poller mirrors only success and failure from the server (`storyteller_task_polling_thread.rs:106–124`).
 
@@ -264,7 +265,10 @@ It emits the standard SessionStart schema and nothing else:
 
 - **Stack:** axum 0.8 on HTTP/1.1, bound to `127.0.0.1:0`: an ephemeral port, IPv4 loopback only, with no host option.
 - **Routes:** exactly two, `GET /v1/health` and `POST /v1/rpc`.
-- **Panics:** no `unwrap`/`expect` in bridge code. A panic is caught per task and becomes **500** `internal_error`.
+- **Panics:** no `unwrap`/`expect` in bridge code.
+  - Op bodies run as spawned tasks, so a panic there (`JoinError::is_panic`) becomes **500** `internal_error`.
+  - A panic in gate or handler code runs on hyper's connection task and drops the connection with no envelope; the CLI reports `bridge_protocol_error`.
+  - `tower-http`'s `catch-panic` is deliberately not added.
 
 ### 4.3 Token and discovery file
 
@@ -309,14 +313,17 @@ Checks run in this order:
 - `op_dispatch` runs each op inside `tauri::async_runtime::spawn` and awaits the `JoinHandle` under a per-op deadline:
   - **30 s** for read and local ops
   - **120 s** for `generate.submit` and `media.upload`
-- Because ops are spawned, a client that disconnects or a deadline that expires **never cancels an op halfway through**. A paid POST therefore always gets to its task-row insert.
+- Because ops are spawned, a client that disconnects or a per-op deadline that expires **never cancels an op halfway through**. A paid POST therefore gets to its task-row insert, with one exception: the 300 s hard cap below.
 - Every outbound ArtCraft API call is wrapped in `tokio::time::timeout`, because `artcraft_client` has none.
 - Inside the detached submit task, the `generate_*_command` call has a hard cap of **300 s**.
+  - On expiry the future is dropped, possibly between POST acceptance and the task-row insert loop (`dispatch.rs:56–84`).
+  - The result is `outcome_unknown`. The job may then exist **without a local row**, so replay cannot find it and no enqueue or credits events fire. It is visible only through `jobs list --remote`.
 - A deadline that expires on submit returns `outcome_unknown` with `details.reason = "deadline"`.
 
 ### 4.6 Logging
 
-- `tower-http` `SetSensitiveRequestHeadersLayer(AUTHORIZATION)` is the outermost layer. There is no `TraceLayer` and no logging of bodies or args.
+- There is no `TraceLayer` and no logging of headers, bodies or args. So no redaction layer is needed, and `tower-http` is not a dependency.
+- If request tracing is ever added, `SetSensitiveRequestHeadersLayer(AUTHORIZATION)` must go in first.
 - One `info!` line per request records the op, result code and `duration_ms`.
 - `generate.submit` additionally logs modality, model, idempotency token and job ids, **never the prompt**.
 - Log macros only, with the default module-path target (no custom `target:`).
@@ -332,8 +339,8 @@ Checks run in this order:
 **Edits to existing files (6, all additive)**
 1. `crates/desktop/artcraft/Cargo.toml`:
    - `axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }`
-   - `tower-http = { version = "0.6", features = ["sensitive-headers"] }`
    - `subtle = "2.5"`
+   - The token uses the existing workspace `rand` (0.9, `os_rng`): `use rand::TryRngCore; OsRng.try_fill_bytes(..)`.
    - tokio features `+ ["net", "time", "sync", "macros"]`
    - Deps stay local to their consumer, per `crates/CLAUDE.md`.
 2. `src/core/mod.rs`: `+ pub mod cli_bridge;`
@@ -432,7 +439,7 @@ It passes through the same gate, token included. It makes no network call.
 | `account.session` | `{}` | `{logged_in, username?, display_name?, user_token?}` | `storyteller_get_login_session_command(app, app.state())` (`S/services/storyteller/commands/storyteller_get_login_session_command.rs:11`). `Ok(Some)` → logged in. `Ok(None)` or `Err{status: 401/403}` → `logged_in: false`. `Err{status: None, retryable}` → `upstream_unavailable`. `Err{status: None, !retryable}` → `internal_error`. Other status → `upstream_error`. No message-text matching. |
 | `account.credits` | `{}` | `{free_credits, monthly_credits, banked_credits, sum_total_credits}` | `require_session` → AC `get_session_credits(&host, Some(&creds), PaymentsNamespace::Artcraft)` (`AC/endpoints/credits/get_session_credits.rs:8`), called **directly**, because the command's `ResponseOrErrorMessage` flattens every error to `bad_request` |
 | `account.subscription` | `{}` | `{active_subscription: null \| {product_slug, namespace, next_bill_at?, subscription_end_at?}}`. `subscription_token` is dropped. | `require_session` → AC `get_session_subscription(...)` (`AC/endpoints/subscriptions/get_session_subscription.rs:9`) directly. Replicates the command's `ArtcraftSubscriptionSlug::from_str` filter, so unknown slugs give `null`. |
-| `models.list` | `{kind: "image"\|"video"}` | `{kind, models: [object]}`, the command's model detail objects passed through unchanged | `list_image_models_command` / `list_video_models_command` (`S/core/commands/generate/models/…:34`) |
+| `models.list` | `{kind: "image"\|"video"}` | `{kind, models: [object]}`, the command's model detail objects passed through unchanged | `list_image_models_command` / `list_video_models_command` (`S/core/commands/generate/models/…:34`). They take only `State<AppEnvConfigs>`, serve a process-wide cached response (`:37`), and return `ResponseOrErrorMessage`. Errors are therefore flattened and map to `upstream_error`, with no `rate_limited` or `not_logged_in` distinction. |
 | `generate.estimate` | `{modality, request}` | `{modality, model, estimate: {cost_in_credits?, cost_in_usd_cents?, is_free, is_unlimited, is_rate_limited, has_watermark, failures_are_refunded?}, effective_credits?}` | 7.3 |
 | `generate.submit` | `{modality, idempotency_token, max_credits, request}` | `{job_ids: [..], idempotency_token, estimate, replayed, replayed_from?}` | 7.4 |
 | `jobs.get` | `{job_ids: [1..50], include_remote?: bool=false}` | `{jobs: [JobView], unresolved: [{job_id, reason}]}` | 7.6 |
@@ -442,7 +449,7 @@ It passes through the same gate, token included. It makes no network call.
 | `media.get` | `{media_token}` | `{media_token, media_class?, media_type?, cdn_url?, thumbnail_url_template?, batch_token?}` | AC `get_media_file` (`AC/endpoints/media_files/get_media_file.rs:27`) |
 | `media.list` | `{media_classes?: [..], page_index?: u32=0, page_size?: 1..100=25, sort_ascending?: bool=false}` | `{username, items: [{media_token, media_class?, media_type?, created_at?, title?, original_filename?, batch_token?, duration_millis?, cdn_url?}], page: {index, size, total_pages?}}` | 8.2 |
 | `settings.get` | `{}` | `{preferences: {…}}`, the preferences passed through | `get_app_preferences_command(app.state())` (`S/core/commands/app_preferences/get_app_preferences_command.rs:48`) |
-| `settings.set` | `{preference: "play_sounds"\|"auto_download", value: bool}` | same as `settings.get` | `update_app_preferences_command` with `ValueType::Bool`. Any other preference gives `setting_not_writable`. |
+| `settings.set` | `{preference: "play_sounds"\|"auto_download", value: bool}` | same as `settings.get` | `update_app_preferences_command(UpdateAppPreferencesRequest{preference, value: Some(ValueType::Bool(v))}, app.state(), app.state())` (`S/core/commands/app_preferences/update_app_preference_command.rs:48`, file name singular; returns `Result<_, String>`). Any other preference gives `setting_not_writable`. |
 
 **Arg constraints**
 - Ids and tokens are 1–128 characters of `[A-Za-z0-9_-]`.
@@ -632,8 +639,11 @@ With no subcommand, it prints help.
 
 ### 7.1 Route guard
 
-- A request is accepted only if it will take ArtCraft's Omni route. The check uses the app's own public predicates (`request.rs:29–42`): `OmniRequest::uses_artcraft()`, and additionally `!uses_legacy_image_endpoint()` for images.
-- The bridge never sets `provider` (it is not part of the upstream request on this route), so routing follows the model id. `grok_*` models route through Omni.
+- A request is accepted only if it will take ArtCraft's Omni route, judged by the app's own public predicates (`request.rs:29–42`).
+- The bridge never sets `provider` (it is not part of the upstream request on this route). With `provider: None`, `uses_artcraft()` is always true (`request.rs:30–32`), so for the bridge the guard **reduces to `!uses_legacy_image_endpoint()` for images**.
+  - Video and splat take Omni under the same predicate (`generate_video_command.rs:35`, `generate_splat_command.rs:8`).
+  - Audio and mesh are Omni-only by construction (`generate_audio_command.rs:7`, `generate_mesh_command.rs:7`).
+  - No test targets the unreachable non-Omni branch for those modalities.
 - Legacy image models fail the guard with `unsupported_route` before any spend: `recraft_3`, `flux_pro_kontext_max`, `flux_dev_juggernaut`, `flux_pro_1`.
 
 ### 7.2 Request deny-list (in this order)
@@ -665,6 +675,7 @@ With no subcommand, it prints help.
 **Edge cases (documented, not engineered around)**
 - **Dismissed jobs** (UI or `jobs.dismiss`) are filtered out of `list_tasks_for_frontend`. A resubmit with their token therefore POSTs and hits the server's duplicate rejection, which surfaces as `upstream_bad_input`.
 - **A failed task-row insert** is logged and not returned (`dispatch.rs:77–80`). The job is real but not replayable, and it is visible via `jobs list --remote`.
+- **The 300 s hard cap** (4.5) can expire after the server accepted the POST but before the row insert. The result is `outcome_unknown`, with the same consequence: no local row, so it can't be replayed and shows only in `jobs list --remote`.
 - **The duplicate-rejection response shape** is unverified. M2 captures it. If it is clearly distinguishable, it is mapped to `outcome_unknown`; otherwise it stays `upstream_bad_input`.
 
 ### 7.5 UI side effects (disclosed to users in README and SKILL)
@@ -695,10 +706,12 @@ With no subcommand, it prints help.
 - `app` for a local row without that tag.
 - `unknown` for a remote-only job.
 
-**Local status mapping**
+**Local status mapping** (an exhaustive match over all 9 `TaskStatus` variants)
 - `pending` → `queued`
+- `started`, `attempt_failed` → `running`
 - `complete_success` → `succeeded` (terminal)
-- `complete_failure` → `failed` (terminal)
+- `complete_failure`, `dead` → `failed` (terminal)
+- `cancelled_by_provider`, `cancelled_by_us` → `cancelled` (terminal)
 - `cancelled_by_user` → `unknown`, non-terminal. The app's cancel is local only.
 
 **Remote merge** (only when `include_remote: true`)
@@ -843,8 +856,9 @@ Replay pre-check and dismiss (temp `TaskDatabase` via `TaskDatabase::connect(&Ap
 - `untagged_tasks_are_never_replayed`
 - `dismiss_refuses_unfinished_jobs`
 
-Media-list binding (loopback fake server):
+Media-list binding:
 - `media_list_builds_the_user_list_url_with_filters`
+- This is a unit test of a pure URL/query-builder fn. `artcraft_client` has no loopback-server tests today, and its dev-deps lack tokio `net`, so no new pattern is introduced and `artcraft_client/Cargo.toml` is untouched.
 
 **Python unit tests** (`pytest -m "not e2e"`)
 - They patch `artcraft_cli.utils.bridge._session` with a scripted fake that returns real status codes and envelope bodies.
