@@ -298,6 +298,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = ["docs/superpowers"]  # plans quote code fragments verbatim
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
