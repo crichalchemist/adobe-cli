@@ -5676,6 +5676,5 @@ The `artcraft` session made these within the spec. They change no Python code, b
 | 6 | `JobView.created_at` is `null` for a dismissed row that the remote list doesn't cover | `jobs get`/`list` can show `created_at: null` for dismissed jobs |
 | 7 | `media.list` items return `cdn_url: null` (list items carry no media links) | `media list` shows no CDN URLs; `media download TOKEN` (via `media.get`) is the way to fetch a file |
 | 8 | For video, `video_batch_count` must be a positive integer, and the request keys `batch_size` and `image_batch_count` are refused with `invalid_args`, so the credit cap can't fail open | use `--set video_batch_count=N` for video batches |
-| 13 | ArtCraft's release profile sets `panic = "abort"`, so a panic inside any op aborts the whole app in a release build (dev builds unwind) | after such a crash the CLI reports `bridge_not_running`; spec §4.2's "panic → 500 internal_error" holds only for dev builds such as `unix_dev.sh` |
 
 If the user confirms them, Task 24 adds rows 7 and 8 to the SKILL's `### generate` and `media` guidance.

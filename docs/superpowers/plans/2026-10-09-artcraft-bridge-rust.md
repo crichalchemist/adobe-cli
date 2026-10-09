@@ -101,7 +101,7 @@
 12. **`media.list` items have `cdn_url: null`** unless the server includes `media_links`. The list endpoint's items carry `public_bucket_path` (`frontend/libs/components/pagescene/src/lib/models/mediaInfo.ts:31`). `media.get` returns the CDN URL.
 13. **Generic `parse_args` message.** Arg-decoding errors use a generic message, so serde never echoes a value (for example a prompt) back.
 14. **Exit cleanup before bind.** The exit-cleanup plugin is registered before bind, so a file can never outlive a half-started bridge.
-15. **Release builds abort on panic.** A new finding for the spec: `crates/desktop/artcraft/Cargo.toml` `[profile.release]` sets `panic = "abort"`. Spec §4.2's "a panic in an op becomes 500 `internal_error`" holds only for dev builds (`unix_dev.sh`); in a release build a panic aborts the app. The no-`unwrap` rule is what protects release builds.
+15. **Panics unwind in release builds too.** `crates/desktop/artcraft/Cargo.toml` declares `[profile.release] panic = "abort"`, but Cargo ignores profiles in workspace members (it warns "profiles for the non root package will be ignored"), and the root `Cargo.toml` has no `[profile]`. So spec §4.2's "a panic in an op becomes 500 `internal_error`" holds in release builds. That would change only if upstream moved `panic = "abort"` to the workspace root.
 
 **Not implemented (proposed amendments awaiting the user):** B (submit op deadline → `operation_in_progress`), C (CLI hint), D (`InternalServerError`/Cloudflare/≥500 → `upstream_unavailable`), E (`RUST_LOG` docs). This plan implements spec `bc7b57d` plus internal correction A only.
 
