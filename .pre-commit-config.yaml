@@ -1,0 +1,25 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+        types_or: [python, pyi]  # keep it out of the code fragments quoted in docs/*.md
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-symlinks
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (strict, installed dev env)
+        entry: mypy artcraft_cli
+        language: system
+        types: [python]
+        pass_filenames: false

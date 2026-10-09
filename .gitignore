@@ -27,3 +27,9 @@ htmlcov/
 # IDE
 .vscode/
 .idea/
+
+# local tooling
+.venv/
+.ruff_cache/
+.mypy_cache/
+.serena/
