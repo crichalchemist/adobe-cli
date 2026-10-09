@@ -36,6 +36,9 @@ def _session() -> requests.Session:
     return _sess
 
 
+MAX_PORT = 65535
+
+
 def read_discovery() -> dict[str, Any]:
     """Read and check the discovery file. Runs before every bridge call."""
     path = DISCOVERY_PATH
@@ -57,8 +60,14 @@ def read_discovery() -> dict[str, Any]:
             "bridge_protocol_mismatch",
             f"bridge protocol {version} is not supported (expected {SUPPORTED_BRIDGE_PROTOCOL})",
         )
-    if not _pid_alive(int(discovery["pid"])):
-        raise CliError("bridge_not_running", f"ArtCraft pid {discovery['pid']} is not running")
+    pid = discovery["pid"]
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise CliError("bridge_protocol_error", f"{path} has an invalid pid")
+    port = discovery["port"]
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= MAX_PORT:
+        raise CliError("bridge_protocol_error", f"{path} has an invalid port")
+    if not _pid_alive(pid):
+        raise CliError("bridge_not_running", f"ArtCraft pid {pid} is not running")
     return discovery
 
 
