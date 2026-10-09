@@ -9,7 +9,7 @@ from typing import Any
 
 import click
 
-from artcraft_cli.core import account, jobs, models
+from artcraft_cli.core import account, generate, jobs, models
 from artcraft_cli.core import app as app_core
 from artcraft_cli.errors import CliError, error_payload
 
@@ -70,6 +70,33 @@ def models_group() -> None:
 def models_list(kind: str) -> None:
     """Image or video models with their options."""
     emit(models.list_models(kind))
+
+
+@cli.command("generate")
+@click.argument("modality", type=click.Choice(generate.MODALITIES))
+@click.option("--model", required=True, help="A model id from `models list`.")
+@click.option("--prompt")
+@click.option("--set", "sets", multiple=True, metavar="KEY=JSON", help="Any Omni request field.")
+@click.option("--media", "media_specs", multiple=True, metavar="FIELD=PATH|TOKEN")
+@click.option("--max-credits", type=click.IntRange(min=0), help="Refuse if it would cost more.")
+@click.option("--dry-run", is_flag=True, help="Price only; never uploads or submits.")
+def generate_cmd(
+    modality: str,
+    model: str,
+    prompt: str | None,
+    sets: tuple[str, ...],
+    media_specs: tuple[str, ...],
+    max_credits: int | None,
+    dry_run: bool,
+) -> None:
+    """Price (--dry-run) or submit a generation through ArtCraft's own route."""
+    if dry_run == (max_credits is not None):
+        raise CliError("usage_error", "pass exactly one of --max-credits N or --dry-run")
+    request = generate.build_request(model, prompt, sets, media_specs)
+    if max_credits is None:
+        emit(generate.estimate(modality, request))
+        return
+    raise CliError("usage_error", "submitting arrives with generate.submit (M2); use --dry-run")
 
 
 @cli.group("jobs")

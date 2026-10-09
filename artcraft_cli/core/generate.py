@@ -1,0 +1,84 @@
+"""Build Omni requests from flags, price them, submit them, and follow the jobs."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from artcraft_cli.errors import CliError
+from artcraft_cli.utils import bridge
+
+MODALITIES = ("image", "video", "audio", "mesh", "splat")
+PLACEHOLDER_FIELD = "image_media_tokens"
+ESTIMATE_PLACEHOLDER = "mf_estimate_{}"
+MEDIA_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def build_request(
+    model: str, prompt: str | None, sets: tuple[str, ...], media_specs: tuple[str, ...]
+) -> dict[str, Any]:
+    """The Omni request. Local files stay as Path values until estimate or submit."""
+    request: dict[str, Any] = {"model": model}
+    if prompt is not None:
+        request["prompt"] = prompt
+    for spec in sets:
+        key, sep, raw = spec.partition("=")
+        if not sep or not key:
+            raise CliError("usage_error", f"--set expects KEY=JSON, got {spec!r}")
+        try:
+            request[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            request[key] = raw
+    for spec in media_specs:
+        field, sep, value = spec.partition("=")
+        if not sep or not field or not value:
+            raise CliError("usage_error", f"--media expects FIELD=PATH|TOKEN, got {spec!r}")
+        path = Path(value).expanduser()
+        if path.is_file():
+            item: str | Path = path
+        elif MEDIA_TOKEN_RE.match(value):
+            item = value
+        else:
+            raise CliError(
+                "usage_error", f"--media {field}: {value!r} is neither a file nor a media token"
+            )
+        if field.endswith("_tokens"):
+            request.setdefault(field, []).append(item)
+        elif field.endswith("_token"):
+            if field in request:
+                raise CliError("usage_error", f"--media {field} takes one value")
+            request[field] = item
+        else:
+            raise CliError("usage_error", f"--media field must end in _token or _tokens: {field}")
+    return request
+
+
+def estimate(modality: str, request: dict[str, Any]) -> dict[str, Any]:
+    """generate --dry-run: price only. Never uploads or submits."""
+    priced: dict[str, Any] = {}
+    omitted: list[str] = []
+    for key, value in request.items():
+        if modality == "image" and key == PLACEHOLDER_FIELD and isinstance(value, list):
+            # Mirror ArtCraft's useImageCostEstimate: each local reference gets a stand-in token.
+            stand_ins: list[str] = []
+            placeholders = 0
+            for item in value:
+                if isinstance(item, Path):
+                    stand_ins.append(ESTIMATE_PLACEHOLDER.format(placeholders))
+                    placeholders += 1
+                else:
+                    stand_ins.append(item)
+            priced[key] = stand_ins
+        elif isinstance(value, Path):
+            omitted.append(key)
+        elif isinstance(value, list) and any(isinstance(item, Path) for item in value):
+            omitted.append(key)
+            kept = [item for item in value if not isinstance(item, Path)]
+            if kept:
+                priced[key] = kept
+        else:
+            priced[key] = value
+    data = bridge.rpc("generate.estimate", {"modality": modality, "request": priced})
+    return {**data, "omitted_inputs": omitted}
