@@ -469,7 +469,7 @@ Expected: the commit is created.
 - Modify: `.gitignore`
 
 **Interfaces:**
-- Produces: `.pre-commit-config.yaml`, which runs ruff-check --fix, ruff-format, the pre-commit-hooks hygiene set, and a local `mypy artcraft_cli` hook (`language: system`). Also CI at `.github/workflows/ci.yml` (Python 3.10 and 3.13: install, pre-commit, `pytest -m "not e2e"`), and the `.gitignore` entries `.venv/`, `.ruff_cache/`, `.mypy_cache/` and `.serena/`.
+- Produces: `.pre-commit-config.yaml`, which runs ruff-check --fix, ruff-format (Python files only, so it never rewrites the code quoted in these plans), the pre-commit-hooks hygiene set, and a local `mypy artcraft_cli` hook (`language: system`). Also CI at `.github/workflows/ci.yml` (Python 3.10 and 3.13: install, pre-commit, `pytest -m "not e2e"`), and the `.gitignore` entries `.venv/`, `.ruff_cache/`, `.mypy_cache/` and `.serena/`.
 
 - [ ] **Step 1: Add the hook config, CI workflow and ignores**
 
@@ -483,6 +483,7 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+        types_or: [python, pyi]  # keep it out of the code fragments quoted in docs/*.md
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -559,7 +560,7 @@ Expected: each repo reports `already up to date!` (ruff-pre-commit v0.17.0, pre-
 PATH="$PWD/.venv/bin:$PATH" pre-commit run --all-files
 ```
 
-Expected: every hook `Passed`, and check-symlinks `(no files to check)Skipped`. If a hygiene hook rewrites a tracked file (for example trailing whitespace in a doc), run it again until clean and add that file to this commit.
+Expected: every hook `Passed`, and check-symlinks `(no files to check)Skipped`. If a hygiene hook rewrites a tracked file (for example trailing whitespace in a doc), run it again until clean and add that file to this commit. Exception: if any hook changes a file under `docs/superpowers/`, revert it with `git checkout -- docs/superpowers` and STOP; the plans quote exact text that later tasks match against.
 
 - [ ] **Step 5: Commit**
 
