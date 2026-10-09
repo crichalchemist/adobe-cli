@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "artcraft-cli"
+version = "0.1.0"
+description = "Drive a locally running ArtCraft desktop app from scripts and AI agents."
+readme = "README.md"
+license = "Elastic-2.0"
+requires-python = ">=3.10"
+dependencies = ["click>=8.2", "requests>=2.31"]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy", "types-requests", "pre-commit"]
+
+[project.scripts]
+artcraft-cli = "artcraft_cli.artcraft_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["artcraft_cli*"]
+
+[tool.pytest.ini_options]
+testpaths = ["artcraft_cli/tests"]
+markers = [
+  "e2e: needs ArtCraft running with ARTCRAFT_CLI_BRIDGE=1",
+  "spend: spends ArtCraft credits; also needs ARTCRAFT_E2E_SPEND=1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["docs/superpowers"]  # plans quote code fragments verbatim
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["artcraft_cli"]
