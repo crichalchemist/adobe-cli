@@ -76,7 +76,7 @@ All of these were verified against ArtCraft `3e5793b` and pinned `tauri-2.11.2`.
 
 **`frontend_subscriber_id`**
 - It is persisted on the task row for both Omni and native paths, and `sqlite_tasks::list_tasks_for_frontend` exposes it.
-- A **null** subscriber id makes the UI (`PageDraw.tsx:74`, `AnglesStore.ts:279`) resolve the user's first pending UI generation with the incoming result. So bridge submits must always set one.
+- A **null** subscriber id makes the UI (`frontend/apps/artcraft/app/src/pages/PageDraw/PageDraw.tsx:74`, `AnglesStore.ts:279`) resolve the user's first pending UI generation with the incoming result. So bridge submits must always set one.
 
 **Events**
 - They are one-way Rust→webview (`app.emit`).
@@ -127,7 +127,8 @@ All of these were verified against ArtCraft `3e5793b` and pinned `tauri-2.11.2`.
    - The tag goes on that exact commit, so it excludes this spec and the later `.gitignore` commit.
    - Push the tag: `git push origin adobe-final`.
 2. Commit the pending `.gitignore` change (`.remember/`) on `main` as `chore: ignore .remember`.
-3. Create the branch `pivot/artcraft-cli`. All the work below happens there and merges once CI is green.
+3. Create the branch `pivot/artcraft-cli`. All the work below happens there and **merges to `main` after M5**, so `main`'s hook and skill never advertise commands that don't exist yet.
+   - Pushing the branch (CI runs only on the pushed branch) and the merge are user-approved outward steps.
 4. Delete `premiere-pro/`, `illustrator/` and `acrobat/`.
    - History is not rewritten, so old commits and the tag keep the Adobe content. That includes `premiere-pro/.../CSInterface.js`, which was copied from the Premiere app bundle.
 
@@ -152,7 +153,7 @@ artcraft_cli/
   errors.py                     CliError + HINTS {code: (hint, retryable)}
   repl.py                       M5 (3.6)
   utils/__init__.py
-  utils/bridge.py               the ONLY module touching HTTP or the discovery file (6.6)
+  utils/bridge.py               the ONLY module touching the bridge or the discovery file (6.2)
   core/__init__.py
   core/{app,account,models,generate,jobs,media,settings}.py
   tests/__init__.py
@@ -179,6 +180,8 @@ docs/superpowers/specs/…        this spec and later specs and plans
 ### 3.3 Packaging and tooling
 
 **`pyproject.toml` (PEP 621)**
+- `[build-system] requires = ["setuptools>=77"]`, `build-backend = "setuptools.build_meta"`. Version 77+ is needed for the SPDX `license` string.
+- `[tool.setuptools.packages.find] include = ["artcraft_cli*"]`. Without it, setuptools' flat-layout auto-discovery picks up `hooks/` and `skills/` and the install fails.
 - name `artcraft-cli`, version `0.1.0`, `license = "Elastic-2.0"`, `requires-python = ">=3.10"`.
 - `dependencies = ["click>=8.2", "requests>=2.31"]`.
 - `[project.optional-dependencies] dev = ["pytest", "ruff", "mypy", "types-requests", "pre-commit"]`.
@@ -188,16 +191,18 @@ docs/superpowers/specs/…        this spec and later specs and plans
 
 **`.pre-commit-config.yaml`**
 - ruff (lint with `--fix`, then format)
-- mypy
+- mypy as a `repo: local` hook (`language: system`, `entry: mypy artcraft_cli`), so it type-checks against the installed dev environment rather than an isolated one that lacks click/requests stubs
 - pre-commit-hooks: trailing-whitespace, end-of-file-fixer, check-yaml, check-json, check-added-large-files, check-symlinks
 - Revs are pinned to the latest stable at implementation time.
-- `pre-commit install` replaces the current no-op `.git/hooks/pre-commit` wrapper.
+- `pre-commit install -f` replaces the existing custom `.git/hooks/pre-commit` wrapper. Without `-f` the wrapper survives as `pre-commit.legacy`, and the hooks run twice.
 
-**`.github/workflows/ci.yml`:** on `push` and `pull_request`:
-- `pre-commit run --all-files`
-- `pip install -e .[dev]`
-- `pytest -m "not e2e"` on Python 3.10 and 3.13
-- Uses `actions/checkout@v4` and `actions/setup-python@v5`.
+**`.github/workflows/ci.yml`:** on `push` and `pull_request`, in this order:
+1. `actions/checkout@v4`, then `actions/setup-python@v5` for Python 3.10 and 3.13
+2. `pip install -e .[dev]`
+3. `pre-commit run --all-files`
+4. `pytest -m "not e2e"`
+
+M0 ships one outcome-named smoke test, so pytest never exits 5 for "no tests collected".
 
 **MCP:** no project-specific MCP server is required. It is a small Python CLI, and the user's global servers cover it. This decision is recorded in `.claude/CLAUDE.md`.
 
@@ -225,9 +230,10 @@ It emits the standard SessionStart schema and nothing else:
 
 **`agent_guidance`**
 - run `ping` first, then `account whoami`
-- always pass `--json`
+- always pass `--json`, **before** the subcommand: `artcraft-cli --json <cmd>`
 - run `--dry-run` before spending, and always pass `--max-credits`
-- on retry, reuse the returned `idempotency_token`; never retry after `outcome_unknown`, check `jobs list --remote` instead
+- after `outcome_unknown`, never resubmit. Check `jobs list --remote --all` instead and match on `model` and a `created_at` at or after the submit time; remote entries carry no idempotency token.
+- after a replay, compare `replayed_from` with the request
 - use `jobs wait`, not hand-written poll loops
 - use absolute paths
 
@@ -245,7 +251,11 @@ It emits the standard SessionStart schema and nothing else:
 ### 3.7 After merge (each confirmed with the user at the time)
 
 - `gh repo rename artcraft-cli`. GitHub redirects the old URL.
-- On the user's machine: `pipx uninstall cli-anything-acrobat cli-anything-illustrator`. Both are editable installs pointing at the deleted code.
+- On the user's machine:
+  - `pipx uninstall cli-anything-acrobat cli-anything-illustrator`. Both are editable installs pointing at the deleted code.
+  - `python3 -m pip uninstall cli-anything-acrobat`, a second, non-pipx editable install.
+  - Remove the dangling CEP symlink `~/Library/Application Support/Adobe/CEP/extensions/com.cli-anything.premierepro`.
+  - Mention that `PlayerDebugMode=1` (`com.adobe.CSXS.11`/`.12`) still enables unsigned CEP extensions for every Adobe app. The user may revert it with `defaults delete`.
 - Keep the local folder `/Volumes/Containers/adobe-cli` as it is. Renaming it orphans this project's Claude memory.
 - Mark the memories `project_acrobat_cli.md` and `project_cep_setup.md` as historical.
 - The user-wide `cli-anything@cli-anything` plugin is a user setting outside this repo; it is mentioned, not changed.
@@ -306,6 +316,7 @@ Checks run in this order:
 - The body is limited to **29,010,604 bytes**: 20 MiB decoded upload × 4/3 for base64 + 1 MiB envelope headroom.
   - The RPC handler extracts `Result<Bytes, BytesRejection>` and maps a length-limit rejection to **413** `payload_too_large` with an envelope body.
   - A `Content-Length` over the cap may also be rejected in the gate.
+- After the envelope is decoded: if `op != "media.upload"` and the raw body exceeds 1,048,576 bytes → `args_too_large` (HTTP 200).
 - No CORS headers are ever sent.
 
 ### 4.5 Execution, deadlines and timeouts
@@ -314,10 +325,15 @@ Checks run in this order:
   - **30 s** for read and local ops
   - **120 s** for `generate.submit` and `media.upload`
 - Because ops are spawned, a client that disconnects or a per-op deadline that expires **never cancels an op halfway through**. A paid POST therefore gets to its task-row insert, with one exception: the 300 s hard cap below.
-- Every outbound ArtCraft API call is wrapped in `tokio::time::timeout`, because `artcraft_client` has none.
+- Every outbound ArtCraft API call is wrapped in `tokio::time::timeout`, because `artcraft_client` has none. Each per-call timeout is shorter than its op deadline:
+  - 20 s for calls inside 30 s ops
+  - 10 s for the remote jobs list
+  - 100 s for the upload call
+- **Any op except `generate.submit`:** an expired op deadline or per-call timeout → `upstream_unavailable` with `details.reason = "deadline"` (retryable). `media.upload` is retried with the same idempotency token.
+- Deadlines and the hard cap are parameters of the dispatch/submit helpers, so tests can drive them with millisecond values.
 - Inside the detached submit task, the `generate_*_command` call has a hard cap of **300 s**.
   - On expiry the future is dropped, possibly between POST acceptance and the task-row insert loop (`dispatch.rs:56–84`).
-  - The result is `outcome_unknown`. The job may then exist **without a local row**, so replay cannot find it and no enqueue or credits events fire. It is visible only through `jobs list --remote`.
+  - The result is `outcome_unknown` with `details.reason = "deadline"`. The job may then exist **without a local row**, so replay cannot find it and no enqueue or credits events fire. It is visible only through `jobs list --remote --all`.
 - A deadline that expires on submit returns `outcome_unknown` with `details.reason = "deadline"`.
 
 ### 4.6 Logging
@@ -328,6 +344,7 @@ Checks run in this order:
 - `generate.submit` additionally logs modality, model, idempotency token and job ids, **never the prompt**.
 - Log macros only, with the default module-path target (no custom `target:`).
 - Wire messages never carry tokens, cookies, prompts or Rust `{:?}` dumps. Upstream `bad_input` text is relayed truncated to 500 characters.
+- **Outside the bridge's control:** ArtCraft's own `artcraft_client` `basic_json_post_request` logs Omni request and response bodies, prompts included, at **debug** level. "Never the prompt" holds at the default Info level only. Changing that would mean editing existing code, which 4.8 rules out.
 
 ### 4.7 Trust boundary
 
@@ -364,6 +381,11 @@ src/core/cli_bridge/ops/{app,account,models,generate,jobs,media,settings}_ops.rs
 crates/api_clients/artcraft/artcraft_client/src/endpoints/media_files/list_user_media_files.rs
 ```
 
+**Testability seam.** The router is built as `build_router(gate_state, dispatch)`, where `dispatch` is an injected async fn (or trait object) taking `(op, args)`. This seam is what the 10.2 gate tests need:
+- Production passes a closure that captures the `AppHandle` and calls `op_dispatch`.
+- Loopback tests pass a stub that counts calls. They don't use `tauri::test::mock_app`, because the tauri `test` feature is not enabled.
+- Health readiness is likewise read through `gate_state`, not directly from `AppHandle`.
+
 **Unchanged:** `lib.rs`, `generate_handler!`, `tauri*.conf.json`, capabilities, CSP, `sqlite_tasks`, `.sqlx`, `artcraft_api_defs`, the frontend. Sub-project 1 adds **no** `#[tauri::command]`.
 
 **ArtCraft conventions the patch follows**
@@ -374,7 +396,7 @@ crates/api_clients/artcraft/artcraft_client/src/endpoints/media_files/list_user_
 - Handlers are named `{verb}_{noun}_handler`.
 - `maybe_` prefix for optionals.
 - `use serde_derive::{Deserialize, Serialize};` and `errors::AnyhowResult`.
-- `impl_enum_display_and_debug_using_to_str!` for enum `Display`.
+- Enums get a `to_str()` and a hand-written `impl Display` that uses it. `impl_enum_display_and_debug_using_to_str!` is private to the `enums` crate and unusable here. Wire codes serialize as snake_case.
 - Wire enums the bridge *consumes* carry an `Unknown(String)` catch-all.
 - Tests sit in a bottom `#[cfg(test)] mod tests`.
 
@@ -427,7 +449,7 @@ It passes through the same gate, token included. It makes no network call.
 
 - `credentials_synced`: `StorytellerCredentialManager::get_credentials()` returns `Ok(Some(_))`.
 - `session_cookie_present`: `.session.is_some()` on that set. This is a local check, not server-validated.
-- `ops` is the allowlist; the CLI feature-detects from it.
+- `ops` is the allowlist; `ping` displays it. The CLI makes no extra health round trip before other ops.
 
 ### 5.5 Ops
 
@@ -436,20 +458,20 @@ It passes through the same gate, token included. It makes no network call.
 | op | args | data | implementation |
 |---|---|---|---|
 | `app.info` | `{}` | `AppInfoResponse` payload passed through: `artcraft_version`, `build_timestamp`, `git_commit_id?`, `git_commit_short_id?`, `git_commit_timestamp?`, `os_platform`, `os_version`, `storyteller_host`, `artcraft_root_directory`, `download_directory` | `get_app_info_command(app.state()×4)` (`S/core/commands/get_app_info_command.rs:47`, sync) |
-| `account.session` | `{}` | `{logged_in, username?, display_name?, user_token?}` | `storyteller_get_login_session_command(app, app.state())` (`S/services/storyteller/commands/storyteller_get_login_session_command.rs:11`). `Ok(Some)` → logged in. `Ok(None)` or `Err{status: 401/403}` → `logged_in: false`. `Err{status: None, retryable}` → `upstream_unavailable`. `Err{status: None, !retryable}` → `internal_error`. Other status → `upstream_error`. No message-text matching. |
+| `account.session` | `{}` | `{logged_in, username?, display_name?, user_token?}` | `storyteller_get_login_session_command(app, app.state())` (`S/services/storyteller/commands/storyteller_get_login_session_command.rs:11`). `Ok(Some)` → logged in. `Ok(None)` or `Err{status: 401/403}` → `logged_in: false`. `Err{status: 429}` → `rate_limited`. `Err{status: None, retryable}` → `upstream_unavailable`. `Err{status: None, !retryable}` → `upstream_error`. Other status → `upstream_error`. No message-text matching. This `DesktopLoginError` mapping applies wherever the command is called, including `media.list` step 2. |
 | `account.credits` | `{}` | `{free_credits, monthly_credits, banked_credits, sum_total_credits}` | `require_session` → AC `get_session_credits(&host, Some(&creds), PaymentsNamespace::Artcraft)` (`AC/endpoints/credits/get_session_credits.rs:8`), called **directly**, because the command's `ResponseOrErrorMessage` flattens every error to `bad_request` |
 | `account.subscription` | `{}` | `{active_subscription: null \| {product_slug, namespace, next_bill_at?, subscription_end_at?}}`. `subscription_token` is dropped. | `require_session` → AC `get_session_subscription(...)` (`AC/endpoints/subscriptions/get_session_subscription.rs:9`) directly. Replicates the command's `ArtcraftSubscriptionSlug::from_str` filter, so unknown slugs give `null`. |
-| `models.list` | `{kind: "image"\|"video"}` | `{kind, models: [object]}`, the command's model detail objects passed through unchanged | `list_image_models_command` / `list_video_models_command` (`S/core/commands/generate/models/…:34`). They take only `State<AppEnvConfigs>`, serve a process-wide cached response (`:37`), and return `ResponseOrErrorMessage`. Errors are therefore flattened and map to `upstream_error`, with no `rate_limited` or `not_logged_in` distinction. |
+| `models.list` | `{kind: "image"\|"video"}` | `{kind, models: [object]}`, the command's model detail objects passed through unchanged | `list_image_models_command` / `list_video_models_command` (`S/core/commands/generate/models/…:34`). They take only `State<AppEnvConfigs>`, serve a process-wide cached response (`:37`), and return `ResponseOrErrorMessage`. Errors are therefore flattened and map to `upstream_error`, with no `rate_limited` or `not_logged_in` distinction. **Image and video only**: no op lists audio, mesh or splat model ids. The SKILL documents known ids for those modalities once they are verified live (M2). |
 | `generate.estimate` | `{modality, request}` | `{modality, model, estimate: {cost_in_credits?, cost_in_usd_cents?, is_free, is_unlimited, is_rate_limited, has_watermark, failures_are_refunded?}, effective_credits?}` | 7.3 |
-| `generate.submit` | `{modality, idempotency_token, max_credits, request}` | `{job_ids: [..], idempotency_token, estimate, replayed, replayed_from?}` | 7.4 |
+| `generate.submit` | `{modality, idempotency_token, max_credits, request}` | `{job_ids: [..], idempotency_token, estimate?, effective_credits?, replayed, replayed_from?}`. `estimate` (the inner object) and `effective_credits` come from 7.4 step 5 and are **omitted on replay**. | 7.4 |
 | `jobs.get` | `{job_ids: [1..50], include_remote?: bool=false}` | `{jobs: [JobView], unresolved: [{job_id, reason}]}` | 7.6 |
 | `jobs.list` | `{origin?: "cli"\|"all"="cli", limit?: 1..200=50, include_remote?: bool=false}` | `{jobs: [JobView], truncated}` | 7.6 |
 | `jobs.dismiss` | `{job_id}` | `{job_id, task_id, dismissed: true}` | 7.7 |
-| `media.upload` | `{filename, content_base64, idempotency_token}` | `{media_token, kind: "image", image_type: "png"\|"jpeg"\|"gif", byte_count}` | 8.1 |
+| `media.upload` | `{content_base64, idempotency_token}` | `{media_token, kind: "image", image_type: "png"\|"jpeg"\|"gif", byte_count}` | 8.1 |
 | `media.get` | `{media_token}` | `{media_token, media_class?, media_type?, cdn_url?, thumbnail_url_template?, batch_token?}` | AC `get_media_file` (`AC/endpoints/media_files/get_media_file.rs:27`) |
 | `media.list` | `{media_classes?: [..], page_index?: u32=0, page_size?: 1..100=25, sort_ascending?: bool=false}` | `{username, items: [{media_token, media_class?, media_type?, created_at?, title?, original_filename?, batch_token?, duration_millis?, cdn_url?}], page: {index, size, total_pages?}}` | 8.2 |
 | `settings.get` | `{}` | `{preferences: {…}}`, the preferences passed through | `get_app_preferences_command(app.state())` (`S/core/commands/app_preferences/get_app_preferences_command.rs:48`) |
-| `settings.set` | `{preference: "play_sounds"\|"auto_download", value: bool}` | same as `settings.get` | `update_app_preferences_command(UpdateAppPreferencesRequest{preference, value: Some(ValueType::Bool(v))}, app.state(), app.state())` (`S/core/commands/app_preferences/update_app_preference_command.rs:48`, file name singular; returns `Result<_, String>`). Any other preference gives `setting_not_writable`. |
+| `settings.set` | `{preference: string, value: bool}`. Writable: `play_sounds`, `auto_download`. | same as `settings.get` | `update_app_preferences_command(UpdateAppPreferencesRequest{preference, value: Some(ValueType::Bool(v))}, app.state(), app.state())` (`S/core/commands/app_preferences/update_app_preference_command.rs:48`, file name singular; returns `Result<_, String>`). The op checks the name itself, rather than relying on deserialization, so any other preference name gives `setting_not_writable`. A non-bool `value` gives `invalid_args`. |
 
 **Arg constraints**
 - Ids and tokens are 1–128 characters of `[A-Za-z0-9_-]`.
@@ -476,7 +498,7 @@ Every code appears in `BridgeErrorCode` (Rust) and in `HINTS` (CLI); the CLI-onl
 | `internal_error` | 500 | bridge bug or panic | check the ArtCraft log | no |
 | `bridge_busy` | 503 | 8 requests in flight | back off | yes |
 | `unknown_op` | 200 | op not in the allowlist | see `ping` ops | no |
-| `invalid_args` | 200 | args failed validation | — | no |
+| `invalid_args` | 200 | args failed validation, including an upload over 20 MiB decoded (`details{max_bytes}`) | — | no |
 | `args_too_large` | 200 | args over 1 MiB on a non-upload op | — | no |
 | `unsupported_route` | 200 | model or field not on ArtCraft's route (legacy image models, inpainting masks) | pick a model from `models list` | no |
 | `operation_in_progress` | 200 | same idempotency token already running | wait, then retry with the same token | yes |
@@ -489,29 +511,31 @@ Every code appears in `BridgeErrorCode` (Rust) and in `HINTS` (CLI); the CLI-onl
 | `upstream_bad_input` | 200 | ArtCraft API rejected the request (message relayed) | fix the request | no |
 | `upstream_unavailable` | 200 | network or timeout on a read op | retry later | yes |
 | `upstream_error` | 200 | other upstream failure | — | no |
-| `outcome_unknown` | 200 | submit may have been accepted (`details{idempotency_token, reason}`) | check `jobs list --remote`; do **not** resubmit | no |
-| `job_not_found` | 200 | no local row and not in the remote list | — | no |
+| `outcome_unknown` | 200 | submit may have been accepted (`details{idempotency_token, reason}`). `reason` is one of `server_error`, `deadline`, `response_timeout`, `connection_lost`; the last two are set by the CLI (6.2). | check `jobs list --remote --all` and match on `model` + `created_at` ≥ submit time; do **not** resubmit | no |
+| `job_not_found` | 200 | `jobs.dismiss`: no local Artcraft row, or the dismiss affected no row. Also the `unresolved` reason in `jobs.get`. | — | no |
 | `job_not_terminal` | 200 | dismiss before the job finished | wait first | no |
 | `media_not_found` | 200 | unknown media token | — | no |
 | `upload_type_unsupported` | 200 | not PNG/JPEG/GIF | convert first | no |
 | `setting_not_writable` | 200 | preference not in the writable set | — | no |
-| `local_store_error` | 200 | task DB or temp-file failure | check the ArtCraft log | no |
-| `webview_unavailable` / `webview_timeout` / `webview_error` | 200 | **reserved** for sub-project 2 | — | — |
+| `local_store_error` | 200 | task DB, temp-file or preferences-file failure | check the ArtCraft log | no |
+
+The sub-project 2 codes `webview_*` (§11) are **not** part of sub-project 1's `BridgeErrorCode` or `HINTS`. New codes need no protocol bump (5.3), so reserving them now gains nothing.
 
 **CLI-only codes** (no HTTP status):
 
-| code | when |
-|---|---|
-| `bridge_not_running` | no discovery file, dead pid, or connection refused. Hint: start ArtCraft with `ARTCRAFT_CLI_BRIDGE=1`. |
-| `discovery_insecure` | the file is not owned by the current user, or is group/other-accessible |
-| `bridge_protocol_mismatch` | version ≠ 1 |
-| `bridge_protocol_error` | malformed response |
-| `response_timeout` | no response within the read timeout. For a submit, rerun with the same `--idempotency-token` to replay. |
-| `job_failed` | `wait` saw a failed job |
-| `job_wait_timeout` | `wait` hit `--timeout` |
-| `download_failed` | CDN fetch failed |
-| `output_exists` | download target exists and `--force` was not given |
-| `input_file_error` | local input unreadable or too large |
+| code | when | hint | retryable |
+|---|---|---|---|
+| `usage_error` | missing, conflicting or malformed flags. This includes neither or both of `--max-credits`/`--dry-run`, bad `KEY=JSON`/`FIELD=PATH`, a malformed `--idempotency-token`, and every Click usage error. | see `--help` | no |
+| `bridge_not_running` | no discovery file, dead pid, or connection refused | start ArtCraft with `ARTCRAFT_CLI_BRIDGE=1` | yes |
+| `discovery_insecure` | the file is not owned by the current user, or is group/other-accessible | fix the file's owner/mode or restart ArtCraft | no |
+| `bridge_protocol_mismatch` | version ≠ 1 | update the CLI or the app | no |
+| `bridge_protocol_error` | malformed response, or the connection dropped after send on a non-submit op | check the ArtCraft log | no |
+| `response_timeout` | no response within the read timeout, on a **non-submit** op. On submit the CLI reports `outcome_unknown{reason: "response_timeout"}` instead. | retry | yes |
+| `job_failed` | `wait` saw a `failed` or `cancelled` job (`details.status`) | inspect `details` | no |
+| `job_wait_timeout` | `wait` hit `--timeout` | wait longer or check `jobs get` | yes |
+| `download_failed` | CDN fetch failed, or the `cdn_url` is not https | retry | yes |
+| `output_exists` | download target exists and `--force` was not given | pass `--force` or another `--out` | no |
+| `input_file_error` | local input unreadable or too large | — | no |
 
 ### 5.7 Native result mapping (`native_result_mapping.rs`)
 
@@ -521,18 +545,28 @@ Every code appears in `BridgeErrorCode` (Rust) and in `HINTS` (CLI); the CLI-onl
 - `too_many_requests` → `rate_limited`
 - `bad_input` → `upstream_bad_input`
 - `server_error`:
-  - in `generate.submit` → `outcome_unknown`. This is conservative: it covers the "accepted but no job tokens" case (`dispatch.rs:72–74`) and also pre-send failures, which dispatch does not tell apart.
-  - in other ops → `upstream_error`
+  - **only from the step-7 `generate_<modality>_command` call in `generate.submit`** → `outcome_unknown` with `details.reason = "server_error"`.
+    - This is conservative. It covers the "accepted but no job tokens" case (`dispatch.rs:72–74`) and also pre-send failures, which dispatch does not tell apart.
+    - Errors from submit steps 1–6 (validation, replay lookup, session, estimate, balance) map exactly as in the read ops, and **never** to `outcome_unknown`.
+  - from `generate.estimate`, including submit step 5 → `upstream_unavailable`. A retry is a free, side-effect-free read.
+  - anywhere else → `upstream_error`
 
-**`StorytellerError`** (calls made directly through `artcraft_client`)
-- `Unauthorized`/`Forbidden` → `not_logged_in`
-- `TooManyRequests` → `rate_limited`
-- `Client(_)` (local setup, file or IO) → `local_store_error`
-- `ApiError::DeserializationError` → `upstream_error`
-- a network or timeout error → `upstream_unavailable` (read ops)
-- else → `upstream_error`
+**`StorytellerError`** (calls made directly through `artcraft_client`; the enum is `Api(ApiError)` | `Client(ClientError)`)
+- `Api(Unauthorized | Forbidden)` → `not_logged_in`
+- `Api(NotFound)` → `media_not_found` in `media.get`; `upstream_error` elsewhere
+- `Api(InvalidRequest)` → `upstream_bad_input` (message relayed, truncated per 4.6)
+- `Api(PaymentRequired)` → `insufficient_credits`
+- `Api(TooManyRequests)` → `rate_limited`
+- `Api(Timeout | NetworkError | OtherReqwestError)`, and the bridge's own `tokio::time::timeout` → `upstream_unavailable`, in every op
+- `Api(DeserializationError)` → `upstream_error`
+- `Api(IoError)` and `Client(_)` (local setup, file or IO) → `local_store_error`
+- every other variant → `upstream_error`
 
-**`String` errors** from commands → `upstream_error`, with a generic message (no `{:?}`).
+**`String` errors** from commands:
+- from `settings.*` (preferences-file I/O) → `local_store_error`
+- otherwise → `upstream_error`
+
+Messages are generic in every case (no `{:?}`).
 
 ## 6. CLI (this repo)
 
@@ -543,6 +577,19 @@ Every code appears in `BridgeErrorCode` (Rust) and in `HINTS` (CLI); the CLI-onl
 - **Without `--json`:** text on stdout; errors go to stderr as `error[<code>]: <message>` plus `hint: …`, exit 1.
 - The token never appears in output, logs, exception messages or `repr`.
 
+**`--json` data shapes**
+- Single-op commands print the bridge `data` unchanged.
+- The composite commands print:
+  - `generate --dry-run` → the `generate.estimate` data plus `omitted_inputs: [field]`
+  - `generate` → the `generate.submit` data, plus `jobs: [JobView]` with `--wait` and `downloads: [{media_token, path}]` with `--download`
+  - `jobs wait` → `{jobs: [JobView], downloads?: [{media_token, path}]}`
+  - `media download` → `{media_token, path, byte_count}`
+  - `media upload` → the `media.upload` data
+
+**Usage errors**
+- `main()` calls `cli.main(standalone_mode=False)`, catches `click.ClickException` and `CliError`, and renders both through one function. Under `--json`, detected from argv, a Click usage error becomes `{"error": {"code": "usage_error", …}}` on stdout with exit 1, not Click's plain-text exit 2.
+- `--json` is a root-group option and goes **before** the subcommand: `artcraft-cli --json <cmd>`.
+
 ### 6.2 Transport — `utils/bridge.py`
 
 **Constants**
@@ -551,6 +598,8 @@ Every code appears in `BridgeErrorCode` (Rust) and in `HINTS` (CLI); the CLI-onl
 - `NOT_SYNCED_WAIT_S = 5`
 
 **Session:** `_sess = requests.Session()` with `trust_env = False` (env proxies are ignored), reached through `_session()`, which is the test patch point.
+- The `Authorization` header is passed **per bridge request** and is never set on `_sess`.
+- CDN downloads (6.4) do not use `_sess`. They use a plain `requests.get` with default `trust_env` (so a user's proxy applies), no auth header, and a named `DOWNLOAD_TIMEOUT` constant. The bridge token can therefore never reach a third-party host.
 
 **`read_discovery()`** runs on every call and checks, in order:
 1. The file exists, otherwise `bridge_not_running`.
@@ -565,12 +614,15 @@ Every code appears in `BridgeErrorCode` (Rust) and in `HINTS` (CLI); the CLI-onl
 - `ok: false` raises `CliError(code, message, details)`.
 - A non-JSON body gives `bridge_protocol_error`.
 
-**Retries**
-- Connection refused before send: re-read discovery once (the app may have restarted on a new port) and retry once, else `bridge_not_running`.
-- 401: re-read discovery once and retry once. The gate rejected it, so nothing ran.
-- `credentials_not_synced`: retry for up to 5 s, then surface it.
-- A read timeout after sending gives `response_timeout`, never `bridge_not_running`.
-- `generate.submit` is **never** retried automatically except in the connection-refused-before-send case.
+**Retries.** None of the retried cases ever reaches the Omni POST, so they apply to `generate.submit` too.
+- **Refused before send**, which only means a connect-phase failure (urllib3 `NewConnectionError` / `ConnectionRefusedError`, or `ConnectTimeout`): re-read discovery once (the app may have restarted on a new port) and retry once, else `bridge_not_running`.
+- **401:** re-read discovery once and retry once. The gate rejected it, so nothing ran.
+- **`credentials_not_synced`:** retry for up to 5 s, then surface it.
+
+Never retried:
+- A read timeout after sending → `response_timeout` on non-submit ops; `outcome_unknown{reason: "response_timeout"}` on `generate.submit`.
+- Any other `ConnectionError` or `ChunkedEncodingError` after the request was sent (e.g. `RemoteDisconnected`) → `bridge_protocol_error` on non-submit ops; `outcome_unknown{reason: "connection_lost"}` on `generate.submit`.
+- Any 5xx or other op error.
 
 ### 6.3 Generate flow on the CLI side (`core/generate.py`)
 
@@ -583,31 +635,43 @@ Every code appears in `BridgeErrorCode` (Rust) and in `HINTS` (CLI); the CLI-onl
 
 **Keys and validation**
 - Idempotency token: `--idempotency-token` or `str(uuid.uuid4())`. It is echoed in every result and error.
-- Upload keys inside a generate: `uuid5(UUID(submit_token), sha256(bytes))`. A rerun with the same token therefore reuses the same uploads.
+- Upload keys inside a generate: a **fresh `uuid4` per upload attempt**.
+  - Deterministic keys would rely on the upload endpoint *replaying* a reused key. That is unverified, and the only evidence for this API family says reused tokens are rejected, which would break reruns.
+  - A rerun therefore re-uploads, which may leave a duplicate library file. Generate replay is unaffected, because the pre-check keys only on the submit token.
+  - If M3 shows uploads replay reused keys, deterministic keys can be adopted later.
 - Images over 20 MiB or not PNG/JPEG/GIF are rejected locally before any RPC: `input_file_error` or `upload_type_unsupported`.
 
 **`--dry-run`**
 - Calls only `generate.estimate`. It never uploads or submits.
-- Local-path media fields are left out of the estimate request and listed in the output as `omitted_inputs`.
+- Local-path media handling:
+  - **Image modality, `image_media_tokens`:** each local path becomes a distinct placeholder token `mf_estimate_<i>`, mirroring ArtCraft's own `useImageCostEstimate.ts`, so reference counts are priced.
+  - **All other fields and modalities:** local paths are left out of the estimate request and listed in `omitted_inputs`. Those estimates may differ from the real submit.
 
 **Otherwise**
-- `--max-credits N` is required; it is refused before any RPC if missing.
+- `--max-credits N` is required. Exactly one of `--max-credits`/`--dry-run` must be given, else `usage_error` before any RPC.
 - Call `generate.submit`.
 - `--wait [--timeout S=900]` then calls `jobs wait`.
-- `--download DIR [--force]` then downloads every result file.
+- `--download DIR [--force]` then downloads every result file. `--download` implies `--wait`.
 
 ### 6.4 Jobs and media on the CLI side
 
-**`jobs wait JOB… [--timeout S] [--download DIR]`**
+**`jobs wait JOB… [--timeout S=900] [--download DIR [--force]]`**
 - Polls `jobs.get` every 5 s; it never polls faster.
 - Sets `include_remote: true` at most once every 60 s.
-- Returns when every job is terminal.
-- Raises `job_failed` (with full details) or `job_wait_timeout` (with the last seen state).
+- Once every job is terminal, it makes **one final** `include_remote: true` call (which expands batches, 7.6) before returning or downloading.
+- Outcomes:
+  - all `succeeded` → success
+  - any `failed` or `cancelled` → `job_failed`, with `details.status` and full details
+  - an id still in `unresolved` with reason `job_not_found` **after** an `include_remote` check → `job_not_found` immediately, rather than sleeping out the timeout
+  - ids unresolved for `rate_limited`, `upstream_unavailable` or `credentials_not_synced` keep polling
+  - the timeout expires → `job_wait_timeout`, with the last seen state
 
-**`media download TOKEN [--out DIR] [--force]`**
-- Calls `media.get`, then fetches `cdn_url` directly.
-- Requires `https`.
+**`media download TOKEN [--out DIR=.] [--force]`**
+- Calls `media.get`, then fetches `cdn_url` directly (6.2: no `_sess`, no token).
+- Requires `https`; otherwise `download_failed`.
 - Refuses to overwrite without `--force` (`output_exists`).
+
+**`media list --page N`** is 0-based, matching `page_index`.
 
 ### 6.5 Command tree (every command accepts the root `--json`)
 
@@ -622,7 +686,7 @@ artcraft-cli [--json]
            [--idempotency-token UUID] [--wait [--timeout S]] [--download DIR [--force]]
   jobs list [--all] [--remote] [--limit N]
   jobs get JOB... [--remote]
-  jobs wait JOB... [--timeout S] [--download DIR [--force]]
+  jobs wait JOB... [--timeout S=900] [--download DIR [--force]]
   jobs dismiss JOB
   media upload FILE [--idempotency-token UUID]
   media get TOKEN
@@ -633,7 +697,7 @@ artcraft-cli [--json]
   repl                                   (M5)
 ```
 
-With no subcommand, it prints help.
+With no subcommand, it prints help. `--json` goes before the subcommand.
 
 ## 7. Section 4 — generating and tracking jobs (bridge side)
 
@@ -656,26 +720,30 @@ With no subcommand, it prints help.
 
 ### 7.3 `generate.estimate`
 
+0. **Validate (7.1, 7.2), exactly as 7.4 step 1.** A legacy image model or inpainting mask → `unsupported_route`; a reserved key or missing `model` → `invalid_args`. Without this, `estimate_image_cost_command` would fall through to its native path and price a model that submit later refuses (`estimate_image_cost_command.rs:39–42`).
 1. Build an `OmniRequest`: `provider: None`, every `frontend_*` field `None`, and `fields` from the request.
 2. Call `estimate_<modality>_cost_command`. It works without login and creates no task.
 3. Compute `effective_credits`: `0` if `is_free` or `is_unlimited`, otherwise `cost_in_credits`. If `cost_in_credits` is not an integer, `effective_credits` is `null`.
+   - **Video:** `effective_credits = cost_in_credits × max(1, video_batch_count)`, until M1 verifies whether the estimate already covers the batch. Overcounting is the fail-closed direction.
 
 ### 7.4 `generate.submit`
 
 1. Validate (7.1, 7.2).
 2. **In-flight set:** if the token is already present → `operation_in_progress`. Otherwise insert it. A drop guard removes it however the task ends: success, error, panic or hard cap.
-3. **Replay pre-check:** `sqlite_tasks::list_tasks_for_frontend` rows with `frontend_subscriber_id == "cli_bridge:<token>"` → return their job ids (`provider_job_id`), **every** row for a batch, with `replayed: true` and `replayed_from: {modality, model}` from the rows (`task_type`/`model_type`). No POST.
+3. **Replay pre-check:** `sqlite_tasks::list_tasks_for_frontend` rows with `frontend_subscriber_id == "cli_bridge:<token>"` → return their job ids (`provider_job_id`), **every** row for a batch, with `replayed: true` and `replayed_from: {modality, model}` from the rows (`task_type`/`model_type`). No POST and no estimate call; `estimate`/`effective_credits` are omitted.
 4. `require_session` (5.5). This also avoids the login modal the command would otherwise trigger.
 5. **Estimate** as in 7.3, with the same request. If `effective_credits` is null → `estimate_unavailable`; if `effective > max_credits` → `cost_exceeds_limit`.
 6. **Balance:** if `effective > 0`, call AC `get_session_credits`. If `effective > sum_total_credits` → `insufficient_credits`.
 7. **Submit:** spawn a detached task that calls `generate_<modality>_command` with `OmniRequest{provider: None, frontend_caller: None, frontend_subscriber_id: Some("cli_bridge:<token>"), frontend_subscriber_payload: None, fields: request + {idempotency_token: token}}`. The 300 s hard cap applies.
 8. Job ids come from `dispatch::job_tokens(&payload)`: `inference_job_token` first, then `all_job_tokens`, deduped. These are exactly the tokens that got task rows.
-9. Respond `{job_ids, idempotency_token, estimate, replayed: false}`. Errors map as in 5.7.
+9. Respond `{job_ids, idempotency_token, estimate, effective_credits, replayed: false}`. Errors map as in 5.7. Only the step-7 call can produce `outcome_unknown`.
+
+Steps 5–6 form a **pure spend decision**, `decide_spend(estimate, max_credits, maybe_balance) -> Result<effective_credits, BridgeErrorCode>`, which can be unit-tested without the network.
 
 **Edge cases (documented, not engineered around)**
-- **Dismissed jobs** (UI or `jobs.dismiss`) are filtered out of `list_tasks_for_frontend`. A resubmit with their token therefore POSTs and hits the server's duplicate rejection, which surfaces as `upstream_bad_input`.
-- **A failed task-row insert** is logged and not returned (`dispatch.rs:77–80`). The job is real but not replayable, and it is visible via `jobs list --remote`.
-- **The 300 s hard cap** (4.5) can expire after the server accepted the POST but before the row insert. The result is `outcome_unknown`, with the same consequence: no local row, so it can't be replayed and shows only in `jobs list --remote`.
+- **Dismissed jobs** (UI or `jobs.dismiss`) are filtered out of `list_tasks_for_frontend`. A resubmit with their token therefore POSTs and hits the server's duplicate rejection. That surfaces as `upstream_bad_input` if the server answers 400, or as `outcome_unknown{reason: "server_error"}` for any other status (`api_error` falls through to `server_error`); M2 records which.
+- **A failed task-row insert** is logged and not returned (`dispatch.rs:79–82`). The job is real but not replayable, and it is visible via `jobs list --remote --all`.
+- **The 300 s hard cap** (4.5) can expire after the server accepted the POST but before the row insert. The result is `outcome_unknown`, with the same consequence: no local row, so it can't be replayed and shows only in `jobs list --remote --all`.
 - **The duplicate-rejection response shape** is unverified. M2 captures it. If it is clearly distinguishable, it is mapped to `outcome_unknown`; otherwise it stays `upstream_bad_input`.
 
 ### 7.5 UI side effects (disclosed to users in README and SKILL)
@@ -700,6 +768,8 @@ With no subcommand, it prints help.
 ```
 
 **Local lookup:** `list_tasks_for_frontend` filtered by `provider_job_id`. It keeps the subscriber id and the `on_complete_*`/`on_failure_*` fields. For dismissed rows it falls back to `get_task_by_provider_and_provider_job_id` (status only).
+- Local rows with a null `provider_job_id` are omitted, since `job_id` is required.
+- Non-Artcraft rows (Sora, Grok-native, Midjourney, WorldLabs, Fal) appear under `origin: "all"` from local data only, with no remote merge.
 
 **origin**
 - `cli` when the subscriber id starts with `cli_bridge:`.
@@ -724,14 +794,17 @@ With no subcommand, it prints help.
   - `cancelled_by_user` / `cancelled_by_system` → `cancelled`
 - A remote terminal status wins over local.
 - A decode failure (the list's enums have no `Unknown` variant) or a network failure sets `sources.remote_error` and falls back to local data.
-- Remote-only jobs appear in `jobs.list` with `origin: "unknown"`.
+- Remote-only jobs appear in `jobs.list` with `origin: "unknown"`, and **only under `origin: "all"`**. That is why `outcome_unknown` recovery uses `jobs list --remote --all`.
 
 **Results**
 - Taken from the local row's completion fields.
-- If a `batch_token` is present, files are expanded with AC `list_batch_generated_redux_media_files`, as `auto_download.rs:42–54` does.
+- **Batch expansion runs only in `jobs.get` with `include_remote: true`, and only for `succeeded` jobs** (D12).
+  - It calls AC `list_batch_generated_redux_media_files`, as `auto_download.rs:42–54` does.
+  - `jobs.list` and local-only `jobs.get` return the primary file plus `batch_token`, unexpanded.
+  - `jobs wait` gets the expanded files from its final `include_remote` call (6.4).
 - If expansion fails, the primary file is used and `sources.remote_error` is set.
 
-**`unresolved`:** ids with no local row and (when consulted) no remote entry are reported as `{job_id, reason: not_found|rate_limited|upstream_unavailable|not_logged_in|credentials_not_synced}`.
+**`unresolved`:** ids with no local row and (when consulted) no remote entry are reported as `{job_id, reason: job_not_found|rate_limited|upstream_unavailable|not_logged_in|credentials_not_synced}`. The reasons reuse error codes; `not_found` would collide with the gate's 404 code.
 
 **`jobs.list`**
 - Sorted by `created_at` descending in the bridge, because the query has no `ORDER BY`.
@@ -745,8 +818,8 @@ With no subcommand, it prints help.
 
 ### 7.7 `jobs.dismiss`
 
-1. Resolve the local row via `get_task_by_provider_and_provider_job_id(provider: Artcraft)`; no row → `job_not_found`.
-2. Compute the status. Local terminal is enough; otherwise consult remote. Not terminal → `job_not_terminal`.
+1. Resolve the local row via `get_task_by_provider_and_provider_job_id(provider: Artcraft)`; no row → `job_not_found`. Only Artcraft-provider rows can be dismissed; other providers' jobs → `job_not_found`.
+2. Compute the status. Local terminal is enough; otherwise consult remote. If the remote check fails, return its mapped code (`rate_limited`/`upstream_unavailable`/…) and do not dismiss. Not terminal → `job_not_terminal`.
 3. Run the `sqlite_tasks` `mark_task_as_dismissed` query directly. It returns a `bool`, which the command would discard; `false` → `job_not_found`.
 
 The `TaskId` never crosses the wire as an input.
@@ -755,11 +828,11 @@ The `TaskId` never crosses the wire as an input.
 
 ### 8.1 `media.upload` (images only)
 
-1. Decode the base64 (workspace `base64 0.22`). If decoding fails → `invalid_args`.
-2. Check the decoded size is ≤ 20,971,520 bytes.
-3. Sniff the magic bytes: PNG, JPEG or GIF. Otherwise `upload_type_unsupported`.
-4. `require_session`.
-5. Await an upload `Semaphore(1)`, so only one decoded copy, temp file and multipart body exists at a time.
+1. Await an upload `Semaphore(1)` **before decoding**, so only one decoded copy, temp file and multipart body exists at a time. Queued uploads still hold their base64 argument.
+2. Decode the base64 (workspace `base64 0.22`). If decoding fails → `invalid_args`.
+3. Check the decoded size: over 20,971,520 bytes → `invalid_args` with `details{max_bytes: 20971520}`. The envelope headroom lets slightly larger payloads past the 413 cap.
+4. Sniff the magic bytes: PNG, JPEG or GIF. Otherwise `upload_type_unsupported`.
+5. `require_session`.
 6. Write to `root.temp_dir().new_named_temp_file_with_extension(ext)` (`temporary_dir.rs:39`), i.e. `~/Artcraft/temp`. The extension is the sniffed one, because the binding sends no MIME type.
 7. Call AC `upload_image_media_file_from_file_with_idempotency_token` (`upload_image_media_file_from_file.rs:56`) with `is_intermediate_system_file: false`, so uploads are **visible** in the user's library. All other optional fields are `None`, and the token is the caller's.
 8. Drop the temp file.
@@ -769,8 +842,8 @@ The `TaskId` never crosses the wire as an input.
 **No paths:** the bridge never reads a caller-supplied path, so the token cannot be used to read files off the disk.
 
 **CLI side**
-- The standalone upload key is `uuid5(NAMESPACE_URL, "artcraft-cli:upload:" + sha256)`.
-- Re-uploading the same bytes should therefore return the same `media_token`. That depends on server-side deduplication, which M3 verifies.
+- The upload key is a fresh `uuid4` per attempt, unless `--idempotency-token` is given (6.3 explains why).
+- Whether re-sending the same key returns the original `media_token` depends on server behaviour, which M3 records. Deterministic keys are revisited only if it does.
 
 ### 8.2 `media.list`
 
@@ -782,7 +855,7 @@ The `TaskId` never crosses the wire as an input.
                          &ListUserMediaFilesQuery{page_index, page_size, sort_ascending, maybe_filter_media_classes})
      -> Result<serde_json::Value, StorytellerError>
    ```
-   - It is `GET /v1/media_files/list/user/{username, path-segment encoded}?include_user_uploads=true&page_size=&page_index=&sort_ascending=[&filter_media_classes=a,b]`, mirroring the frontend's `MediaFilesApi.ts:157–191`.
+   - It is `GET /v1/media_files/list/user/{username, path-segment encoded}?include_user_uploads=true&page_size=&page_index=&sort_ascending=[&filter_media_classes=a,b]`, mirroring the frontend's `frontend/apps/artcraft/app/src/Classes/ApiManager/MediaFilesApi.ts:157–191`.
    - It lives in `artcraft_client`, because `basic_json_get_request` is `pub(crate)`.
 4. Project the response tolerantly. Every item field is optional; the server's `media_class` is nullable and items have no `media_links`.
 
@@ -804,7 +877,10 @@ The `TaskId` never crosses the wire as an input.
 - **Unsafe or debug:** `load_without_cors_command` (an unrestricted fetcher, i.e. SSRF), `flip_image`, and `platform_info_command` (a subset of `app.info`).
 - **Cosmetic:** `get_provider_order_command`, `set_provider_order_command`. No generation path reads the order.
 - **No job handle or not idempotent:** `enqueue_image_bg_removal_command`, `enqueue_image_to_3d_object_command`, `enqueue_image_to_gaussian_command`.
-- **Superseded:** `get_task_queue_command`, by `list_tasks_for_frontend`, which keeps the subscriber id.
+- **Superseded:**
+  - `get_task_queue_command`, by `list_tasks_for_frontend`, which keeps the subscriber id
+  - `storyteller_get_credits_command` and `storyteller_get_subscription_command`, by direct `artcraft_client` calls (5.5)
+  - `mark_task_as_dismissed_command`, by the `mark_task_as_dismissed` query (7.7)
 - **Irreversible:** `media_file_delete_command` (decision D8).
 - **Native and legacy routes** inside the allowed generate and estimate commands (decision D6).
 
@@ -822,7 +898,7 @@ The `TaskId` never crosses the wire as an input.
 
 ### 10.2 Tests (named after outcomes; mock only boundaries — user Rule 10)
 
-**Rust loopback tests** use a tokio `TcpListener` on `127.0.0.1:0` and a reqwest client, following `storyteller_login_bridge_tests.rs` and `core/utils/auto_download.rs`. No `AppHandle` is needed.
+**Rust loopback tests** use a tokio `TcpListener` on `127.0.0.1:0` and a reqwest client, following `storyteller_login_bridge_tests.rs` and `core/utils/auto_download.rs`. No `AppHandle` is needed: gate tests build the router with `build_router(gate_state, stub_dispatch)` (4.8), and the stub counts calls.
 
 Gate and router:
 - `dns_rebound_host_is_rejected_before_token_check`
@@ -847,9 +923,25 @@ Token and discovery file:
 
 Mapping and request builder:
 - `native_results_map_to_stable_codes`
-- `legacy_image_models_are_refused_before_spend`
+- `pre_post_failures_in_submit_never_become_outcome_unknown`
+- `legacy_image_models_are_refused_before_estimate_or_spend`
 - `reserved_request_keys_are_refused`
 - `inpainting_masks_are_unsupported_route`
+
+Spend decision (the pure `decide_spend` fn) and in-flight set:
+- `unknown_or_fractional_cost_is_refused_before_spend`
+- `cost_over_max_credits_is_refused_before_spend`
+- `free_or_unlimited_generations_skip_the_balance_check`
+- `balance_below_estimate_is_refused_before_spend`
+- `video_batches_are_priced_per_video_until_verified`
+- `concurrent_submits_with_one_token_post_once` (stub submit fn)
+- `stalled_submit_returns_outcome_unknown_and_frees_its_token_after_the_hard_cap`: drives the submit helper with `std::future::pending()` and a 50 ms cap; needs no new tokio features.
+
+Job view (pure merge fn):
+- `every_local_and_remote_status_maps_to_the_closed_vocabulary`
+- `remote_terminal_status_wins_over_local`
+- `remote_only_jobs_appear_only_under_origin_all`
+- `rows_without_a_provider_job_id_are_omitted`
 
 Replay pre-check and dismiss (temp `TaskDatabase` via `TaskDatabase::connect(&AppDataRoot)`):
 - `resubmitting_a_tagged_token_replays_every_batch_row_without_posting`
@@ -878,21 +970,28 @@ Media-list binding:
 - `proxy_env_vars_never_route_bridge_traffic`
 - `token_never_appears_in_stdout_stderr_or_exceptions`
 - `credentials_not_synced_is_retried_briefly_then_surfaced`
+- `connection_dropped_after_send_never_resubmits`
+- `bridge_token_is_never_sent_to_cdn_hosts`
 
 `test_core.py`:
 - `json_success_is_one_compact_object_without_error_key`
 - `json_errors_are_objects_on_stdout_with_exit_1`
 - `human_errors_go_to_stderr`
 - `spend_without_max_credits_is_refused_before_any_rpc`
+- `cli_without_subcommand_prints_help` (the M0 smoke test)
+- `usage_errors_render_as_json_with_exit_1`
 - `dry_run_never_uploads_or_submits`
+- `dry_run_prices_local_image_refs_with_placeholders`
 - `submit_is_never_auto_retried_after_send`
-- `rerun_with_same_token_and_local_input_gets_same_upload_key`
+- `read_timeout_on_submit_reports_outcome_unknown`
 - `fields_ending_in_tokens_accumulate_lists`
 - `wait_returns_all_files_when_every_job_succeeds`
 - `wait_fails_with_job_failed_and_full_details`
 - `wait_times_out_with_last_seen_state`
 - `wait_never_polls_faster_than_five_seconds`
 - `wait_checks_remote_at_most_once_a_minute`
+- `wait_fails_fast_on_unknown_job_ids`
+- `wait_treats_cancelled_jobs_as_failed`
 - `download_refuses_to_clobber_and_rejects_non_https`
 - `oversized_or_unsupported_upload_is_rejected_before_rpc`
 - `repl_dispatches_lines_to_commands_and_survives_errors` (M5)
@@ -920,12 +1019,12 @@ Spend tests also require `ARTCRAFT_E2E_SPEND=1` and use `--max-credits ${ARTCRAF
 Each milestone ends with a live checklist, run by the user with `ARTCRAFT_CLI_BRIDGE=1 ./script/artcraft/unix_dev.sh`.
 
 **M0 — Baseline**
-- Here: the git sequence (3.1), deleting the harnesses, rebranding, workspace tooling, `.claude/CLAUDE.md` with its symlinks, the rewritten hook and skill. Done when CI is green on the empty `artcraft_cli` package.
+- Here: the git sequence (3.1), deleting the harnesses, rebranding, workspace tooling, `.claude/CLAUDE.md` with its symlinks, the rewritten hook and skill, and the smoke test `cli_without_subcommand_prints_help`. Done when CI is green on the pushed branch (pushing is user-approved).
 - There: build and run **unmodified** ArtCraft on `feature/cli-bridge`; the user logs in once. This records the baseline build time and any toolchain installs needed.
 
 **M1 — Thin live slice, zero spend**
-- Rust: deps, spawn, server, token and discovery file with the exit plugin, gate/router/envelope, dispatch, result mapping, and the ops `app.info`, `account.session`, `jobs.list` (local only) and `generate.estimate`.
-- Python: `utils/bridge.py`, `errors.py`, the root CLI, and `ping`, `app info`, `account whoami`, `jobs list`, `generate --dry-run`, with their unit tests.
+- Rust: deps, spawn, server, token and discovery file with the exit plugin, gate/router/envelope, dispatch, result mapping, and the ops `app.info`, `account.session`, `models.list`, `jobs.list` (local only) and `generate.estimate`. `models.list` is in M1 because the dry-run check needs a real model id and costs nothing.
+- Python: `utils/bridge.py`, `errors.py`, the root CLI, and `ping`, `app info`, `account whoami`, `models list`, `jobs list`, `generate --dry-run`, with their unit tests.
 - Live checklist:
   - (a) With the variable unset: no file, no listener (`lsof`), and the log says "cli bridge disabled".
   - (b) With it set: the file exists with `-rw-------` and the 6 keys.
@@ -933,34 +1032,41 @@ Each milestone ends with a live checklist, run by the user with `ARTCRAFT_CLI_BR
   - (d) `app info` shows the version.
   - (e) `account whoami` matches the UI, both logged in and logged out.
   - (f) `jobs list --all` matches the task panel.
-  - (g) `generate image --model <id> --prompt x --dry-run` returns a price, while `--model recraft_3` gives `unsupported_route`. Credits and the task count are unchanged.
+  - (g) Dry runs, with credits and the task count unchanged throughout:
+    - `generate image --model <id from models list> --prompt x --dry-run` returns a price.
+    - `--model recraft_3` gives `unsupported_route`.
+    - Compare batch-1 and batch-2 estimates for image and video, to learn whether `cost_in_credits` covers the batch. Record the answer in memory and in 7.3.
   - (h) curl negatives: `Host: evil.test`, `Origin`, `Sec-Fetch-Site` → 403; no token → 401; `OPTIONS` → 405; `text/plain` POST → 415; an unknown op → 200 `unknown_op`.
   - (i) Cmd-Q removes the file. This confirms the runtime plugin receives `RunEvent::Exit`, which has not been verified until now.
 
 **M2 — Spending**
-- Rust: `job_tokens` → `pub(crate)`, `generate.submit`, `jobs.get` with the remote merge and batch expansion, `account.credits`, `account.subscription`, `models.list`.
-- Python: `generate` submit, `--wait` and `--download`; `jobs get` and `jobs wait`; `account credits` and `subscription`; `models list`.
+- Rust: `job_tokens` → `pub(crate)`, `generate.submit`, `jobs.get` with the remote merge and batch expansion, the `jobs.list` remote merge (`include_remote`), `account.credits`, `account.subscription`.
+- Python: `generate` submit, `--wait` and `--download`; `jobs get`, `jobs wait`, `jobs list --remote`; `account credits` and `subscription`.
 - Live checklist:
   - The cheapest image completes, and its files download.
   - A rerun with the same token replays, and the credits balance is unchanged.
-  - Dismiss the job, then resubmit the same token to capture the real duplicate-rejection status and body. Record it in project memory and update 7.4 if the shape is distinguishable.
+  - Dismiss the job **in the app's task panel** (`jobs dismiss` arrives in M4). Then resubmit the same token, with `--max-credits` equal to the original estimate, to capture the real duplicate-rejection status and body.
+    - If the server unexpectedly accepts it, that cap bounds the second charge.
+    - Record the result in project memory, and update 5.6/7.4 if the shape is distinguishable.
   - `--max-credits` below the estimate gives `cost_exceeds_limit` with no spend.
 
 **M3 — Media**
-- Rust: the AC `list_user_media_files` binding and its loopback test; `media.upload`, `media.get`, `media.list`.
+- Rust: the AC `list_user_media_files` binding and its URL-builder unit test; `media.upload`, `media.get`, `media.list`.
 - Python: `media upload`, `get`, `list`, `download`; `generate --media FIELD=PATH`.
 - Live checklist:
   - An uploaded PNG appears in the library.
-  - Re-uploading the same bytes returns the same token (server dedupe).
+  - Record whether re-sending an upload with the same `--idempotency-token` returns the original token, returns an error, or creates a second file. That decides whether deterministic upload keys are ever adopted (6.3).
   - The uploaded token works in `image_media_tokens`.
   - `media list` paging matches the app.
 
 **M4 — Settings, dismiss, hardening**
-- `settings.get`/`set` and `jobs.dismiss`.
-- Every excluded command name sent as an op returns `unknown_op`.
-- Grepping the app log for the token, prompts or base64 finds nothing.
-- `play_sounds false` silences a bridge generation.
-- `preferred_download_directory` is refused.
+- Rust: `settings.get`/`set` and `jobs.dismiss`.
+- Python: `jobs dismiss`, `settings get`, `settings set`.
+- Live checks:
+  - Every excluded command name (§9) sent as an op returns `unknown_op`.
+  - Run with `RUST_LOG` unset (default Info level; see 4.6): grepping the app log for the token, prompts or base64 finds nothing.
+  - `play_sounds false` silences a bridge generation.
+  - A raw RPC `settings.set {preference: "preferred_download_directory", value: true}` returns `setting_not_writable`.
 
 **M5 — REPL and docs**
 - The fresh REPL.
@@ -977,7 +1083,10 @@ Each milestone ends with a live checklist, run by the user with `ARTCRAFT_CLI_BR
   4. The frontend replies through a new `#[tauri::command] cli_bridge_respond_command({id, ok, data|error})`, in its own file per ArtCraft convention.
   5. Rust resolves the oneshot, with a timeout.
 - The reply goes through invoke rather than an event: typed args, deserialize errors surface, and there is no dependency on event-capability details.
-- **Reserved codes** (HTTP 200): `webview_unavailable` (no handler registered, or the emit failed), `webview_timeout`, and `webview_error` (frontend code in `details.frontend_code`).
+- **Codes added in sub-project 2** (HTTP 200; additive, so no protocol bump; not present in sub-project 1's enum):
+  - `webview_unavailable`: no handler registered, or the emit failed
+  - `webview_timeout`
+  - `webview_error`: the frontend's code goes in `details.frontend_code`
 - **Precondition:** webview ops work only while the relevant page or editor is mounted.
 
 ## 12. Risks, known limits, and pre-existing debt
@@ -986,10 +1095,11 @@ Each milestone ends with a live checklist, run by the user with `ARTCRAFT_CLI_BR
 - Credential sync timing (M1)
 - Exit-plugin cleanup (M1)
 - The duplicate-rejection shape (M2)
-- Upload dedupe and the media-list response shape (M3)
+- Whether `cost_in_credits` covers the batch count (M1)
+- Upload key behaviour and the media-list response shape (M3)
 
 **Spend**
-- `outcome_unknown` can mean credits were spent with no local row. The mitigations are: the CLI never auto-resubmits, `jobs list --remote` reconciles, and every submit is logged with its token.
+- `outcome_unknown` can mean credits were spent with no local row. The mitigations are: the CLI never auto-resubmits; `jobs list --remote --all` reconciles, matching on model and time because remote entries carry no token; and every submit is logged with its token.
 - There is no per-launch spend cap (D7). Revisit before letting agents run unattended loops.
 
 **UI and cache behaviour**
@@ -997,8 +1107,9 @@ Each milestone ends with a live checklist, run by the user with `ARTCRAFT_CLI_BR
 - Preference changes made through the bridge are not pushed to the UI (8.3).
 
 **Memory bounds**
-- Worst case, request bodies use about 8 × 29 MB.
-- Detached ops outlive their HTTP permit, but uploads are serialized by `Semaphore(1)`. This is acceptable for an opt-in loopback bridge.
+- About 8 × 29 MB of in-flight request bodies, plus the base64 args (≤ 28 MB each) of any queued detached uploads, which outlive their HTTP permit.
+- Only one decoded upload exists at a time, because the semaphore is taken before decoding.
+- This is accepted for an opt-in loopback bridge.
 
 **Upstream churn**
 - Rebasing the fork is the user's ongoing cost.
@@ -1011,6 +1122,7 @@ Each milestone ends with a live checklist, run by the user with `ARTCRAFT_CLI_BR
 - The storyteller poller's `handle_failed_job(..).await?` aborts a whole poll pass.
 - `ResponseOrErrorMessage`'s `From<String>` defaults to `bad_request`.
 - `provider_list_command.rs:103` byte-slices `&key[..6]`, which panics on non-ASCII keys.
+- `artcraft_client`'s `basic_json_post_request` logs request and response bodies, prompts included, at debug level.
 
 **Pre-existing debt in this repo** (moot after the pivot)
 - The Premiere REPL is broken under Click 8.3 (`mix_stderr`).
