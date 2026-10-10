@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import itertools
 import json
@@ -243,6 +244,30 @@ SINGLE_OP_COMMANDS: list[tuple[list[str], str, dict[str, Any]]] = [
         ["jobs", "get", "j1", "j2", "--remote"],
         "jobs.get",
         {"job_ids": ["j1", "j2"], "include_remote": True},
+    ),
+    (["media", "get", "mf_1"], "media.get", {"media_token": "mf_1"}),
+    (["media", "list"], "media.list", {"page_index": 0, "page_size": 25, "sort_ascending": False}),
+    (
+        [
+            "media",
+            "list",
+            "--class",
+            "image",
+            "--class",
+            "video",
+            "--page",
+            "2",
+            "--page-size",
+            "10",
+            "--oldest-first",
+        ],
+        "media.list",
+        {
+            "page_index": 2,
+            "page_size": 10,
+            "sort_ascending": True,
+            "media_classes": ["image", "video"],
+        },
     ),
 ]
 
@@ -526,3 +551,41 @@ def test_local_write_failures_during_download_are_json_errors(
     assert code == 1
     assert error_of(out)["code"] == "download_failed"
     assert list(locked.iterdir()) == []
+
+
+# --- media (spec §6.3, §8.1) ------------------------------------------------------------
+
+
+def test_oversized_or_unsupported_upload_is_rejected_before_rpc(
+    fake_bridge: FakeBridge, run: Run, tmp_path: Path
+) -> None:
+    huge = tmp_path / "huge.png"
+    with huge.open("wb") as handle:
+        handle.write(PNG)
+        handle.truncate(20 * 1024 * 1024 + 1)
+    text = tmp_path / "notes.png"
+    text.write_text("not an image")
+
+    huge_code, huge_out, _ = run("--json", "media", "upload", str(huge))
+    text_code, text_out, _ = run("--json", "media", "upload", str(text))
+    gone_code, gone_out, _ = run("--json", "media", "upload", str(tmp_path / "missing.png"))
+
+    assert (huge_code, error_of(huge_out)["code"]) == (1, "input_file_error")
+    assert (text_code, error_of(text_out)["code"]) == (1, "upload_type_unsupported")
+    assert (gone_code, error_of(gone_out)["code"]) == (1, "input_file_error")
+    assert fake_bridge.calls == []
+
+
+def test_media_upload_sends_base64_bytes_with_the_given_token(
+    fake_bridge: FakeBridge, run: Run, tmp_path: Path
+) -> None:
+    image = tmp_path / "ref.png"
+    image.write_bytes(PNG)
+    fake_bridge.on("media.upload", {"media_token": "mf_new", "kind": "image"})
+
+    code, out, _ = run("--json", "media", "upload", str(image), "--idempotency-token", TOKEN_A)
+
+    assert code == 0
+    assert json.loads(out)["media_token"] == "mf_new"
+    (args,) = fake_bridge.args("media.upload")
+    assert args == {"content_base64": base64.b64encode(PNG).decode(), "idempotency_token": TOKEN_A}

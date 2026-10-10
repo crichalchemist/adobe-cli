@@ -182,6 +182,51 @@ def jobs_wait(
     emit(result)
 
 
+@cli.group("media")
+def media_group() -> None:
+    """Media in the ArtCraft library."""
+
+
+@media_group.command("upload")
+@click.argument("file", type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--idempotency-token", metavar="UUID")
+def media_upload(file: Path, idempotency_token: str | None) -> None:
+    """Upload a PNG, JPEG or GIF (at most 20 MiB) to the library."""
+    emit(media.upload(file, media.idempotency_token(idempotency_token)))
+
+
+@media_group.command("get")
+@click.argument("media_token")
+def media_get(media_token: str) -> None:
+    """One media file's details."""
+    emit(media.get(media_token))
+
+
+@media_group.command("list")
+@click.option("--class", "classes", multiple=True, help="Filter by media class (repeatable).")
+@click.option("--page", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--page-size", type=click.IntRange(1, 100), default=25, show_default=True)
+@click.option("--oldest-first", is_flag=True)
+def media_list(classes: tuple[str, ...], page: int, page_size: int, oldest_first: bool) -> None:
+    """Your library, newest first; pages are 0-based."""
+    emit(
+        media.list_media(
+            classes=list(classes), page=page, page_size=page_size, oldest_first=oldest_first
+        )
+    )
+
+
+@media_group.command("download")
+@click.argument("media_token")
+@click.option(
+    "--out", "out_dir", type=click.Path(file_okay=False, path_type=Path), default=Path(".")
+)
+@click.option("--force", is_flag=True, help="Overwrite an existing file.")
+def media_download(media_token: str, out_dir: Path, force: bool) -> None:
+    """Download a media file from the CDN."""
+    emit(media.download(media_token, out_dir, force=force))
+
+
 def main(argv: list[str] | None = None) -> int:
     """Console entry point. Returns the exit code: 0 success, 1 any error."""
     args = sys.argv[1:] if argv is None else argv
