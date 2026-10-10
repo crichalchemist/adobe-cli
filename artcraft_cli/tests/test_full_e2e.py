@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,9 @@ from artcraft_cli.utils import bridge
 
 pytestmark = pytest.mark.e2e
 MAX_CREDITS = os.environ.get("ARTCRAFT_E2E_MAX_CREDITS", "10")
+spend = pytest.mark.skipif(
+    os.environ.get("ARTCRAFT_E2E_SPEND") != "1", reason="set ARTCRAFT_E2E_SPEND=1 to spend credits"
+)
 
 
 @pytest.fixture(scope="session")
@@ -120,3 +124,55 @@ def test_installed_console_script_emits_parseable_json(live: dict[str, Any]) -> 
     )
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout)["bridge"]["protocol"] == 1
+
+
+def test_estimate_changes_no_credits_and_creates_no_job(
+    live: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    before_credits = cli_json(capsys, "account", "credits")["sum_total_credits"]
+    before_jobs = cli_json(capsys, "jobs", "list", "--all", "--limit", "200")["jobs"]
+
+    cheapest_image_model(capsys, refs=False)
+
+    assert cli_json(capsys, "account", "credits")["sum_total_credits"] == before_credits
+    assert cli_json(capsys, "jobs", "list", "--all", "--limit", "200")["jobs"] == before_jobs
+
+
+# --- Spend -----------------------------------------------------------------------------
+
+
+@spend
+@pytest.mark.spend
+def test_cheapest_image_completes_and_downloads_every_file(
+    live: dict[str, Any], capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    model_id, _ = cheapest_image_model(capsys, refs=False)
+    body = cli_json(
+        capsys, "generate", "image", "--model", model_id, "--prompt", "a red cube",
+        "--max-credits", MAX_CREDITS, "--download", str(tmp_path),
+    )  # fmt: skip
+    assert body["jobs"] and all(job["status"] == "succeeded" for job in body["jobs"])
+    expected = sum(len(job["result"]["files"]) for job in body["jobs"])
+    assert len(body["downloads"]) == expected > 0
+    assert all(Path(item["path"]).stat().st_size > 0 for item in body["downloads"])
+
+
+@spend
+@pytest.mark.spend
+def test_retry_with_returned_token_replays_without_second_charge(
+    live: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    model_id, _ = cheapest_image_model(capsys, refs=False)
+    token = str(uuid.uuid4())
+    argv = ["generate", "image", "--model", model_id, "--prompt", "a blue cube"]
+    argv += ["--max-credits", MAX_CREDITS, "--idempotency-token", token, "--wait"]
+
+    first = cli_json(capsys, *argv)
+    balance = cli_json(capsys, "account", "credits")["sum_total_credits"]
+    again = cli_json(capsys, *argv)
+
+    assert first["replayed"] is False
+    assert again["replayed"] is True
+    assert again["job_ids"] == first["job_ids"]
+    assert again["replayed_from"] == {"modality": "image", "model": model_id}
+    assert cli_json(capsys, "account", "credits")["sum_total_credits"] == balance
