@@ -171,7 +171,7 @@ def test_cheapest_image_completes_and_downloads_every_file(
         "--max-credits", MAX_CREDITS, "--download", str(tmp_path),
     )  # fmt: skip
     assert body["jobs"] and all(job["status"] == "succeeded" for job in body["jobs"])
-    expected = sum(len(job["result"]["files"]) for job in body["jobs"])
+    expected = len({file["media_token"] for job in body["jobs"] for file in job["result"]["files"]})
     assert len(body["downloads"]) == expected > 0
     assert all(Path(item["path"]).stat().st_size > 0 for item in body["downloads"])
 

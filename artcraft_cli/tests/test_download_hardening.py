@@ -158,3 +158,26 @@ def test_media_token_ending_in_part_suffix_is_refused(
     fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path
 ) -> None:
     refuse_media_token(fake_bridge, run, cdn, tmp_path, "a1.part")
+
+
+def test_sibling_jobs_sharing_batch_files_download_each_file_once(
+    fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    out_dir = tmp_path / "downloads"
+    shared = (("a1", "https://cdn.example/a1.png"), ("b1", "https://cdn.example/b1.png"))
+    fake_bridge.on(
+        "jobs.get",
+        {"jobs": [finished("j1", *shared), finished("j2", *shared)], "unresolved": []},
+    )
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "j2", "--download", str(out_dir))
+
+    assert code == 0
+    assert [Path(item["path"]).name for item in json.loads(out)["downloads"]] == [
+        "a1.png",
+        "b1.png",
+    ]
+    assert [call["url"] for call in cdn] == [
+        "https://cdn.example/a1.png",
+        "https://cdn.example/b1.png",
+    ]

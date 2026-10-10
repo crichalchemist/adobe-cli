@@ -105,7 +105,11 @@ def download_files(
     Every destination is checked before the first fetch. A failure part-way re-raises the
     same error with the paths already saved under details["downloaded"].
     """
-    files = [file for job in finished for file in (job.get("result") or {}).get("files", [])]
+    unique: dict[str, dict[str, Any]] = {}
+    for job in finished:
+        for file in (job.get("result") or {}).get("files", []):
+            unique.setdefault(file["media_token"], file)  # siblings share batch files
+    files = list(unique.values())
     paths = [media.plan(file["media_token"], file.get("cdn_url"), out_dir)[1] for file in files]
     for path in paths:
         if not force and path.exists():
