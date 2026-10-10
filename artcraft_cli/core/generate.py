@@ -97,6 +97,7 @@ def run(
     force: bool,
 ) -> dict[str, Any]:
     """Submit, then optionally wait and download. Every error echoes the token."""
+    job_ids: list[str] | None = None
     try:
         if download_dir is not None:
             media.prepare_download_dir(download_dir)
@@ -111,14 +112,17 @@ def run(
                 "request": request,
             },
         )
+        job_ids = list(result["job_ids"])
         if wait or download_dir is not None:
-            finished = jobs.wait_for_jobs(list(result["job_ids"]), timeout_s=timeout_s)
+            finished = jobs.wait_for_jobs(job_ids, timeout_s=timeout_s)
             result["jobs"] = finished
             if download_dir is not None:
                 result["downloads"] = jobs.download_files(finished, download_dir, force=force)
         return result
     except CliError as err:
         err.details.setdefault("idempotency_token", token)
+        if job_ids is not None:
+            err.details.setdefault("job_ids", job_ids)
         raise
 
 
