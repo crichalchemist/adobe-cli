@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 
 from artcraft_cli.errors import CliError
 from artcraft_cli.utils import bridge
@@ -94,3 +95,16 @@ def test_discovery_token_with_trailing_newline_is_refused_without_echoing_it(
     assert (code, json.loads(out)["error"]["code"]) == (1, "bridge_protocol_error")
     assert secret not in out + err
     assert fake_bridge.calls == []
+
+
+def test_unexpected_request_error_on_submit_reports_outcome_unknown(
+    fake_bridge: FakeBridge,
+) -> None:
+    token = "0b8f6a52-6a8e-4d55-9d43-3d6c0f6f1a10"
+    fake_bridge.on("generate.submit", requests.exceptions.ContentDecodingError("bad gzip"))
+
+    with pytest.raises(CliError) as caught:
+        bridge.rpc("generate.submit", {"idempotency_token": token})
+
+    assert caught.value.code == "outcome_unknown"
+    assert caught.value.details == {"idempotency_token": token, "reason": "connection_lost"}

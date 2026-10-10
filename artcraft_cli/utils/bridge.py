@@ -165,6 +165,8 @@ def _send(
         raise _after_send("response_timeout", read_timeout, submit_token) from None
     except requests.exceptions.ChunkedEncodingError:
         raise _after_send("connection_lost", read_timeout, submit_token) from None
+    except requests.RequestException:
+        raise _after_send("connection_lost", read_timeout, submit_token) from None
 
 
 def _refused_before_send(exc: requests.ConnectionError) -> bool:
