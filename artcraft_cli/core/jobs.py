@@ -81,13 +81,24 @@ def _all_succeeded(seen: dict[str, Any], job_ids: list[str]) -> bool:
 def download_files(
     finished: list[dict[str, Any]], out_dir: Path, *, force: bool
 ) -> list[dict[str, str]]:
-    """Download every result file of finished jobs into out_dir."""
+    """Download every result file of finished jobs into out_dir.
+
+    Every destination is checked before the first fetch. A failure part-way re-raises the
+    same error with the paths already saved under details["downloaded"].
+    """
+    files = [file for job in finished for file in (job.get("result") or {}).get("files", [])]
+    paths = [media.plan(file["media_token"], file.get("cdn_url"), out_dir)[1] for file in files]
+    for path in paths:
+        if not force and path.exists():
+            raise CliError("output_exists", f"{path} already exists", {"path": str(path)})
     downloads: list[dict[str, str]] = []
-    for job in finished:
-        result = job.get("result") or {}
-        for file in result.get("files", []):
+    try:
+        for file in files:
             path, _ = media.download_to(
                 file["media_token"], file.get("cdn_url"), out_dir, force=force
             )
             downloads.append({"media_token": file["media_token"], "path": str(path)})
+    except CliError as err:
+        saved = [item["path"] for item in downloads]
+        raise CliError(err.code, err.message, {**err.details, "downloaded": saved}) from err
     return downloads
