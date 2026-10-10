@@ -124,7 +124,9 @@ def test_models_list_includes_ids_estimate_accepts(
 
 def test_browser_origin_is_refused(live: dict[str, Any]) -> None:
     discovery = bridge.read_discovery()
-    resp = requests.get(
+    session = requests.Session()
+    session.trust_env = False  # the live token must not travel through HTTP proxies
+    resp = session.get(
         f"http://127.0.0.1:{discovery['port']}/v1/health",
         headers={
             "Authorization": f"Bearer {discovery['token']}",
