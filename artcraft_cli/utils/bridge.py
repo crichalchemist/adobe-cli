@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 import urllib3
@@ -22,6 +24,8 @@ READ_TIMEOUT = 150
 HEALTH_TIMEOUT = 5
 NOT_SYNCED_WAIT_S = 5
 NOT_SYNCED_POLL_S = 0.5
+DOWNLOAD_TIMEOUT = 60
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 SUBMIT_OP = "generate.submit"
 
 _sess: requests.Session | None = None
@@ -205,3 +209,27 @@ def _parse(resp: requests.Response) -> dict[str, Any]:
     raise CliError(
         error["code"], str(error.get("message", "")), details if isinstance(details, dict) else None
     )
+
+
+def download(url: str, dest: Path, *, force: bool) -> int:
+    """Fetch a CDN URL into dest. Uses plain requests: no bridge session, no token."""
+    if urlparse(url).scheme != "https":
+        raise CliError("download_failed", "refusing a download URL that is not https")
+    if dest.exists() and not force:
+        raise CliError("output_exists", f"{dest} already exists", {"path": str(dest)})
+    partial = dest.with_name(dest.name + ".part")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with requests.get(url, timeout=DOWNLOAD_TIMEOUT, stream=True) as resp:
+            resp.raise_for_status()
+            with partial.open("wb") as out:
+                for chunk in resp.iter_content(DOWNLOAD_CHUNK_BYTES):
+                    out.write(chunk)
+        partial.replace(dest)
+    except OSError as exc:  # requests.RequestException is an OSError too
+        with contextlib.suppress(OSError):
+            partial.unlink(missing_ok=True)
+        raise CliError(
+            "download_failed", f"download failed: {type(exc).__name__}", {"path": str(dest)}
+        ) from None
+    return dest.stat().st_size

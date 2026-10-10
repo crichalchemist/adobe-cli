@@ -181,6 +181,19 @@ def fake_bridge(discovery: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPat
 
 
 @pytest.fixture
+def cdn(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """A fake CDN at the requests.get boundary; records each call's url and kwargs."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_get(url: str, **kwargs: Any) -> requests.Response:
+        calls.append({"url": url, **kwargs})
+        return response(200, b"image-bytes:" + url.encode())
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    return calls
+
+
+@pytest.fixture
 def run(capsys: pytest.CaptureFixture[str]) -> Iterator[Callable[..., tuple[int, str, str]]]:
     """Run the real console entry point; returns (exit_code, stdout, stderr)."""
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import itertools
 import json
 import os
 from collections.abc import Callable
@@ -9,8 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 
-from .conftest import HEALTH, FakeBridge
+from .conftest import HEALTH, FakeBridge, FakeClock
 
 Run = Callable[..., tuple[int, str, str]]
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -20,6 +23,29 @@ ESTIMATE = {
     "estimate": {"cost_in_credits": 4, "is_free": False, "is_unlimited": False},
     "effective_credits": 4,
 }
+
+
+def job(job_id: str, status: str, files: list[str] | None = None) -> dict[str, Any]:
+    """A JobView (spec §7.6) with the fields the CLI reads."""
+    return {
+        "job_id": job_id,
+        "status": status,
+        "terminal": status in ("succeeded", "failed", "cancelled"),
+        "result": {
+            "files": [
+                {"media_token": token, "cdn_url": f"https://cdn.example/{token}.png"}
+                for token in files or []
+            ],
+            "batch_token": None,
+        }
+        if status == "succeeded"
+        else None,
+        "failure": {"category": "model", "message": "nsfw"} if status == "failed" else None,
+    }
+
+
+def jobs_seen(*views: dict[str, Any], unresolved: list[dict[str, str]] | None = None) -> Any:
+    return {"jobs": list(views), "unresolved": unresolved or []}
 
 
 def error_of(out: str) -> dict[str, Any]:
@@ -223,3 +249,203 @@ def test_single_op_commands_print_bridge_data_unchanged(
     assert (code, err) == (0, "")
     assert json.loads(out) == data
     assert fake_bridge.args(op) == [args]
+
+
+# --- jobs wait (spec §6.4) --------------------------------------------------------------
+
+
+def test_wait_returns_all_files_when_every_job_succeeds(
+    fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    fake_bridge.on(
+        "jobs.get",
+        jobs_seen(job("j1", "running"), job("j2", "queued")),
+        jobs_seen(job("j1", "succeeded", ["a1"]), job("j2", "succeeded", ["b1"])),
+        jobs_seen(job("j1", "succeeded", ["a1"]), job("j2", "succeeded", ["b1", "b2", "b3"])),
+    )
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "j2", "--download", str(tmp_path))
+
+    assert code == 0
+    body = json.loads(out)
+    saved = [Path(item["path"]) for item in body["downloads"]]
+    assert [path.name for path in saved] == ["a1.png", "b1.png", "b2.png", "b3.png"]
+    assert all(path.read_bytes().startswith(b"image-bytes:") for path in saved)
+    assert fake_bridge.args("jobs.get")[-1]["include_remote"] is True
+
+
+def test_wait_fails_with_job_failed_and_full_details(fake_bridge: FakeBridge, run: Run) -> None:
+    fake_bridge.on("jobs.get", jobs_seen(job("j1", "running")), jobs_seen(job("j1", "failed")))
+
+    code, out, _ = run("--json", "jobs", "wait", "j1")
+
+    assert code == 1
+    error = error_of(out)
+    assert error["code"] == "job_failed"
+    assert error["details"]["status"] == "failed"
+    assert error["details"]["job"]["failure"] == {"category": "model", "message": "nsfw"}
+
+
+def test_wait_times_out_with_last_seen_state(
+    fake_bridge: FakeBridge, run: Run, clock: FakeClock
+) -> None:
+    fake_bridge.on("jobs.get", jobs_seen(job("j1", "running")))
+    started = clock.now
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "--timeout", "30")
+
+    assert code == 1
+    error = error_of(out)
+    assert error["code"] == "job_wait_timeout"
+    assert error["details"]["last_seen"]["jobs"][0]["status"] == "running"
+    assert clock.now - started <= 30
+
+
+def test_wait_never_polls_faster_than_five_seconds(fake_bridge: FakeBridge, run: Run) -> None:
+    fake_bridge.on(
+        "jobs.get",
+        *[jobs_seen(job("j1", "running"))] * 30,
+        jobs_seen(job("j1", "succeeded", ["a1"])),
+    )
+
+    code, _, _ = run("--json", "jobs", "wait", "j1")
+
+    times = [call["t"] for call in fake_bridge.calls]
+    assert code == 0
+    assert len(times) == 32
+    assert all(later - earlier >= 5 for earlier, later in itertools.pairwise(times))
+
+
+def test_wait_checks_remote_at_most_once_a_minute(fake_bridge: FakeBridge, run: Run) -> None:
+    fake_bridge.on("jobs.get", jobs_seen(job("j1", "running")))
+
+    run("--json", "jobs", "wait", "j1", "--timeout", "300")
+
+    remote_times = [
+        call["t"] for call in fake_bridge.calls if call["json"]["args"]["include_remote"]
+    ]
+    assert len(remote_times) >= 4
+    assert all(later - earlier >= 60 for earlier, later in itertools.pairwise(remote_times))
+
+
+def test_wait_fails_fast_on_unknown_job_ids(
+    fake_bridge: FakeBridge, run: Run, clock: FakeClock
+) -> None:
+    unknown = [{"job_id": "nope", "reason": "job_not_found"}]
+    fake_bridge.on("jobs.get", jobs_seen(job("j1", "running"), unresolved=unknown))
+    started = clock.now
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "nope")
+
+    assert code == 1
+    assert error_of(out)["code"] == "job_not_found"
+    assert clock.now == started
+
+
+def test_wait_treats_cancelled_jobs_as_failed(fake_bridge: FakeBridge, run: Run) -> None:
+    fake_bridge.on("jobs.get", jobs_seen(job("j1", "succeeded", ["a1"]), job("j2", "cancelled")))
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "j2")
+
+    assert code == 1
+    error = error_of(out)
+    assert (error["code"], error["details"]["status"]) == ("job_failed", "cancelled")
+
+
+def test_wait_fails_fast_when_logged_out(
+    fake_bridge: FakeBridge, run: Run, clock: FakeClock
+) -> None:
+    logged_out = [{"job_id": "j9", "reason": "not_logged_in"}]
+    fake_bridge.on("jobs.get", jobs_seen(unresolved=logged_out))
+    started = clock.now
+
+    code, out, _ = run("--json", "jobs", "wait", "j9")
+
+    assert code == 1
+    assert error_of(out)["code"] == "not_logged_in"
+    assert clock.now == started
+
+
+def test_wait_finishes_jobs_that_succeed_in_the_last_interval(
+    fake_bridge: FakeBridge, run: Run
+) -> None:
+    fake_bridge.on(
+        "jobs.get",
+        jobs_seen(job("j1", "running")),
+        jobs_seen(job("j1", "running")),
+        jobs_seen(job("j1", "succeeded", ["a1"])),
+    )
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "--timeout", "14")
+
+    assert code == 0
+    assert [view["status"] for view in json.loads(out)["jobs"]] == ["succeeded"]
+    assert fake_bridge.args("jobs.get")[-1]["include_remote"] is True
+
+
+def test_download_refuses_to_clobber_and_rejects_non_https(
+    fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    done = job("j1", "succeeded", ["a1"])
+    plain_http = job("j2", "succeeded", ["b1"])
+    plain_http["result"]["files"][0]["cdn_url"] = "http://cdn.example/b1.png"
+    fake_bridge.on("jobs.get", jobs_seen(done), jobs_seen(done), jobs_seen(plain_http))
+    (tmp_path / "a1.png").write_bytes(b"keep me")
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "--download", str(tmp_path))
+    assert (code, error_of(out)["code"]) == (1, "output_exists")
+    assert (tmp_path / "a1.png").read_bytes() == b"keep me"
+
+    code, _, _ = run("--json", "jobs", "wait", "j1", "--download", str(tmp_path), "--force")
+    assert code == 0
+    assert (tmp_path / "a1.png").read_bytes() != b"keep me"
+
+    code, out, _ = run("--json", "jobs", "wait", "j2", "--download", str(tmp_path))
+    assert (code, error_of(out)["code"]) == (1, "download_failed")
+    assert all(call["url"].startswith("https://") for call in cdn)
+
+
+class DropsMidway(io.BytesIO):
+    """A CDN body whose connection resets after the first chunk."""
+
+    def read(self, size: int | None = -1, /) -> bytes:
+        if self.tell():
+            raise ConnectionResetError("connection reset by peer")
+        return super().read(4)
+
+
+def test_interrupted_download_leaves_no_partial_file(
+    fake_bridge: FakeBridge, run: Run, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def dropping_get(url: str, **kwargs: Any) -> requests.Response:
+        resp = requests.Response()
+        resp.status_code = 200
+        resp.raw = DropsMidway(b"partial image bytes")
+        return resp
+
+    monkeypatch.setattr(requests, "get", dropping_get)
+    fake_bridge.on("jobs.get", jobs_seen(job("j1", "succeeded", ["a1"])))
+    dest = tmp_path / "downloads"
+    dest.mkdir()
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "--download", str(dest))
+
+    assert (code, error_of(out)["code"]) == (1, "download_failed")
+    assert list(dest.iterdir()) == []
+
+
+def test_local_write_failures_during_download_are_json_errors(
+    fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    fake_bridge.on("jobs.get", jobs_seen(job("j1", "succeeded", ["a1"])))
+    try:
+        code, out, _ = run("--json", "jobs", "wait", "j1", "--download", str(locked))
+    finally:
+        locked.chmod(0o700)
+
+    assert code == 1
+    assert error_of(out)["code"] == "download_failed"
+    assert list(locked.iterdir()) == []

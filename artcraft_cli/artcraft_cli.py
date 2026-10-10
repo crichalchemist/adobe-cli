@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 import click
@@ -131,6 +132,27 @@ def jobs_list(all_origins: bool, remote: bool, limit: int) -> None:
 def jobs_get(job_ids: tuple[str, ...], remote: bool) -> None:
     """Status and results of specific jobs."""
     emit(jobs.get_jobs(list(job_ids), remote=remote))
+
+
+@jobs_group.command("wait")
+@click.argument("job_ids", nargs=-1, required=True)
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0),
+    default=jobs.DEFAULT_WAIT_TIMEOUT_S,
+    show_default=True,
+)
+@click.option("--download", "download_dir", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--force", is_flag=True, help="Overwrite existing downloads.")
+def jobs_wait(
+    job_ids: tuple[str, ...], timeout: float, download_dir: Path | None, force: bool
+) -> None:
+    """Wait until every job succeeds; fail on the first failed or cancelled job."""
+    finished = jobs.wait_for_jobs(list(job_ids), timeout_s=timeout)
+    result: dict[str, Any] = {"jobs": finished}
+    if download_dir is not None:
+        result["downloads"] = jobs.download_files(finished, download_dir, force=force)
+    emit(result)
 
 
 def main(argv: list[str] | None = None) -> int:

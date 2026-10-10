@@ -228,3 +228,26 @@ def test_connection_dropped_after_send_never_resubmits(fake_bridge: FakeBridge) 
         "reason": "connection_lost",
     }
     assert fake_bridge.ops() == ["generate.submit"]
+
+
+def test_bridge_token_is_never_sent_to_cdn_hosts(
+    fake_bridge: FakeBridge,
+    run: Callable[..., tuple[int, str, str]],
+    cdn: list[dict[str, Any]],
+    tmp_path: Path,
+) -> None:
+    finished = {
+        "job_id": "j1",
+        "status": "succeeded",
+        "terminal": True,
+        "result": {"files": [{"media_token": "a1", "cdn_url": "https://cdn.example/a1.png"}]},
+    }
+    fake_bridge.on("jobs.get", {"jobs": [finished], "unresolved": []})
+
+    code, _, _ = run("--json", "jobs", "wait", "j1", "--download", str(tmp_path))
+
+    assert code == 0
+    assert [call["url"] for call in cdn] == ["https://cdn.example/a1.png"]
+    assert "headers" not in cdn[0]
+    assert TOKEN not in json.dumps(cdn, default=str)
+    assert fake_bridge.ops() == ["jobs.get"]
