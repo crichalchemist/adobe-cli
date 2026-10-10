@@ -10,7 +10,7 @@ from typing import Any
 
 import click
 
-from artcraft_cli.core import account, generate, jobs, media, models
+from artcraft_cli.core import account, generate, jobs, media, models, settings
 from artcraft_cli.core import app as app_core
 from artcraft_cli.errors import CliError, error_payload
 
@@ -182,6 +182,13 @@ def jobs_wait(
     emit(result)
 
 
+@jobs_group.command("dismiss")
+@click.argument("job_id")
+def jobs_dismiss(job_id: str) -> None:
+    """Hide a finished job from the app's task list."""
+    emit(jobs.dismiss(job_id))
+
+
 @cli.group("media")
 def media_group() -> None:
     """Media in the ArtCraft library."""
@@ -225,6 +232,25 @@ def media_list(classes: tuple[str, ...], page: int, page_size: int, oldest_first
 def media_download(media_token: str, out_dir: Path, force: bool) -> None:
     """Download a media file from the CDN."""
     emit(media.download(media_token, out_dir, force=force))
+
+
+@cli.group("settings")
+def settings_group() -> None:
+    """ArtCraft app preferences."""
+
+
+@settings_group.command("get")
+def settings_get() -> None:
+    """All preferences (read-only)."""
+    emit(settings.get())
+
+
+@settings_group.command("set")
+@click.argument("preference", type=click.Choice(settings.WRITABLE))
+@click.argument("value", type=click.Choice(["true", "false"]))
+def settings_set(preference: str, value: str) -> None:
+    """Set play_sounds or auto_download."""
+    emit(settings.set_preference(preference, value == "true"))
 
 
 def main(argv: list[str] | None = None) -> int:

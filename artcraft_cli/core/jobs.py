@@ -102,3 +102,7 @@ def download_files(
         saved = [item["path"] for item in downloads]
         raise CliError(err.code, err.message, {**err.details, "downloaded": saved}) from err
     return downloads
+
+
+def dismiss(job_id: str) -> dict[str, Any]:
+    return bridge.rpc("jobs.dismiss", {"job_id": job_id})

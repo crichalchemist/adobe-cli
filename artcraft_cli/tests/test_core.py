@@ -270,6 +270,18 @@ SINGLE_OP_COMMANDS: list[tuple[list[str], str, dict[str, Any]]] = [
             "media_classes": ["image", "video"],
         },
     ),
+    (["settings", "get"], "settings.get", {}),
+    (
+        ["settings", "set", "play_sounds", "false"],
+        "settings.set",
+        {"preference": "play_sounds", "value": False},
+    ),
+    (
+        ["settings", "set", "auto_download", "true"],
+        "settings.set",
+        {"preference": "auto_download", "value": True},
+    ),
+    (["jobs", "dismiss", "j1"], "jobs.dismiss", {"job_id": "j1"}),
 ]
 
 
