@@ -13,9 +13,10 @@ from typing import Any
 import pytest
 import requests
 
-from .conftest import HEALTH, FakeBridge, FakeClock
+from .conftest import HEALTH, FakeBridge, FakeClock, op_error
 
 Run = Callable[..., tuple[int, str, str]]
+TOKEN_A = "0b8f6a52-6a8e-4d55-9d43-3d6c0f6f1a10"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 ESTIMATE = {
     "modality": "image",
@@ -109,6 +110,17 @@ def test_human_errors_go_to_stderr(run: Run) -> None:
         ["jobs"],
         ["generate", "image"],
         ["jobs", "list", "--limit", "0"],
+        ["generate", "image", "--model", "m", "--max-credits", "5", "--idempotency-token", "nope"],
+        [
+            "generate",
+            "image",
+            "--model",
+            "m",
+            "--max-credits",
+            "5",
+            "--idempotency-token",
+            TOKEN_A.upper(),
+        ],
     ],
 )
 def test_usage_errors_render_as_json_with_exit_1(run: Run, argv: list[str]) -> None:
@@ -249,6 +261,71 @@ def test_single_op_commands_print_bridge_data_unchanged(
     assert (code, err) == (0, "")
     assert json.loads(out) == data
     assert fake_bridge.args(op) == [args]
+
+
+# --- generate submit (spec §6.2, §6.3) --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("outcome", "code"),
+    [
+        (op_error("internal_error", status=500), "internal_error"),
+        (op_error("bridge_busy", status=503), "bridge_busy"),
+        (op_error("upstream_error"), "upstream_error"),
+        (op_error("operation_in_progress"), "operation_in_progress"),
+    ],
+)
+def test_submit_is_never_auto_retried_after_send(
+    fake_bridge: FakeBridge, run: Run, outcome: requests.Response, code: str
+) -> None:
+    fake_bridge.on("generate.submit", outcome)
+
+    exit_code, out, _ = run(
+        "--json", "generate", "image", "--model", "m", "--prompt", "x",
+        "--max-credits", "5", "--idempotency-token", TOKEN_A,
+    )  # fmt: skip
+
+    assert exit_code == 1
+    error = error_of(out)
+    assert error["code"] == code
+    assert error["details"]["idempotency_token"] == TOKEN_A
+    assert fake_bridge.ops() == ["generate.submit"]
+
+
+def test_read_timeout_on_submit_reports_outcome_unknown(fake_bridge: FakeBridge, run: Run) -> None:
+    fake_bridge.on("generate.submit", requests.ReadTimeout())
+
+    code, out, _ = run(
+        "--json", "generate", "image", "--model", "m", "--prompt", "x",
+        "--max-credits", "5", "--idempotency-token", TOKEN_A,
+    )  # fmt: skip
+
+    assert code == 1
+    error = error_of(out)
+    assert error["code"] == "outcome_unknown"
+    assert error["details"] == {"idempotency_token": TOKEN_A, "reason": "response_timeout"}
+    assert error["retryable"] is False
+    assert fake_bridge.ops() == ["generate.submit"]
+
+
+def test_unwritable_download_dir_is_refused_before_any_spend(
+    fake_bridge: FakeBridge, run: Run, tmp_path: Path
+) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        code, out, _ = run(
+            "--json", "generate", "image", "--model", "m", "--prompt", "x", "--max-credits", "5",
+            "--idempotency-token", TOKEN_A, "--download", str(locked),
+        )  # fmt: skip
+    finally:
+        locked.chmod(0o700)
+
+    assert code == 1
+    error = error_of(out)
+    assert (error["code"], error["details"]["idempotency_token"]) == ("usage_error", TOKEN_A)
+    assert fake_bridge.calls == []
 
 
 # --- jobs wait (spec §6.4) --------------------------------------------------------------

@@ -10,7 +10,7 @@ from typing import Any
 
 import click
 
-from artcraft_cli.core import account, generate, jobs, models
+from artcraft_cli.core import account, generate, jobs, media, models
 from artcraft_cli.core import app as app_core
 from artcraft_cli.errors import CliError, error_payload
 
@@ -93,6 +93,16 @@ def models_list(kind: str) -> None:
 @click.option("--media", "media_specs", multiple=True, metavar="FIELD=PATH|TOKEN")
 @click.option("--max-credits", type=click.IntRange(min=0), help="Refuse if it would cost more.")
 @click.option("--dry-run", is_flag=True, help="Price only; never uploads or submits.")
+@click.option("--idempotency-token", metavar="UUID")
+@click.option("--wait", is_flag=True, help="Wait for the jobs to finish.")
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0),
+    default=jobs.DEFAULT_WAIT_TIMEOUT_S,
+    show_default=True,
+)
+@click.option("--download", "download_dir", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--force", is_flag=True, help="Overwrite existing downloads.")
 def generate_cmd(
     modality: str,
     model: str,
@@ -101,6 +111,11 @@ def generate_cmd(
     media_specs: tuple[str, ...],
     max_credits: int | None,
     dry_run: bool,
+    idempotency_token: str | None,
+    wait: bool,
+    timeout: float,
+    download_dir: Path | None,
+    force: bool,
 ) -> None:
     """Price (--dry-run) or submit a generation through ArtCraft's own route."""
     if dry_run == (max_credits is not None):
@@ -109,7 +124,19 @@ def generate_cmd(
     if max_credits is None:
         emit(generate.estimate(modality, request))
         return
-    raise CliError("usage_error", "submitting arrives with generate.submit (M2); use --dry-run")
+    token = media.idempotency_token(idempotency_token)
+    emit(
+        generate.run(
+            modality,
+            request,
+            max_credits=max_credits,
+            token=token,
+            wait=wait,
+            timeout_s=timeout,
+            download_dir=download_dir,
+            force=force,
+        )
+    )
 
 
 @cli.group("jobs")

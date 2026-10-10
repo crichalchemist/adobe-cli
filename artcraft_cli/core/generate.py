@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from artcraft_cli.core import jobs, media
 from artcraft_cli.errors import CliError
 from artcraft_cli.utils import bridge
 
@@ -82,3 +83,49 @@ def estimate(modality: str, request: dict[str, Any]) -> dict[str, Any]:
             priced[key] = value
     data = bridge.rpc("generate.estimate", {"modality": modality, "request": priced})
     return {**data, "omitted_inputs": omitted}
+
+
+def run(
+    modality: str,
+    request: dict[str, Any],
+    *,
+    max_credits: int,
+    token: str,
+    wait: bool,
+    timeout_s: float,
+    download_dir: Path | None,
+    force: bool,
+) -> dict[str, Any]:
+    """Submit, then optionally wait and download. Every error echoes the token."""
+    try:
+        if download_dir is not None:
+            media.prepare_download_dir(download_dir)
+        if _has_local_files(request):
+            raise CliError("usage_error", "local --media files arrive in M3; pass media tokens")
+        result = bridge.rpc(
+            "generate.submit",
+            {
+                "modality": modality,
+                "idempotency_token": token,
+                "max_credits": max_credits,
+                "request": request,
+            },
+        )
+        if wait or download_dir is not None:
+            finished = jobs.wait_for_jobs(list(result["job_ids"]), timeout_s=timeout_s)
+            result["jobs"] = finished
+            if download_dir is not None:
+                result["downloads"] = jobs.download_files(finished, download_dir, force=force)
+        return result
+    except CliError as err:
+        err.details.setdefault("idempotency_token", token)
+        raise
+
+
+def _has_local_files(request: dict[str, Any]) -> bool:
+    for value in request.values():
+        if isinstance(value, Path):
+            return True
+        if isinstance(value, list) and any(isinstance(item, Path) for item in value):
+            return True
+    return False
