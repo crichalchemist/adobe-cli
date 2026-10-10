@@ -9,7 +9,9 @@ agent_guidance: >-
   and match on model and a created_at at or after the submit time (remote entries carry no
   idempotency token). After a replay (`replayed: true`), compare `replayed_from` with your
   request. Use `jobs wait` or `generate --wait`, never hand-written poll loops. Use absolute
-  paths.
+  paths. When submitting, pass your own lowercase --idempotency-token (`uuidgen | tr A-Z a-z`)
+  so you still hold it if the command is killed. Keep --timeout below your shell tool's
+  timeout, or submit without --wait and then run `jobs wait`.
 ---
 
 # artcraft-cli
