@@ -60,6 +60,18 @@ def account_whoami() -> None:
     emit(account.whoami())
 
 
+@account_group.command("credits")
+def account_credits() -> None:
+    """Credit balances."""
+    emit(account.credits())
+
+
+@account_group.command("subscription")
+def account_subscription() -> None:
+    """The active subscription, if any."""
+    emit(account.subscription())
+
+
 @cli.group("models")
 def models_group() -> None:
     """Generation models."""
@@ -106,10 +118,19 @@ def jobs_group() -> None:
 
 @jobs_group.command("list")
 @click.option("--all", "all_origins", is_flag=True, help="Include jobs started in the app.")
+@click.option("--remote", is_flag=True, help="Merge the server's newest 100 jobs.")
 @click.option("--limit", type=click.IntRange(1, 200), default=50, show_default=True)
-def jobs_list(all_origins: bool, limit: int) -> None:
+def jobs_list(all_origins: bool, remote: bool, limit: int) -> None:
     """Recent jobs, newest first."""
-    emit(jobs.list_jobs(all_origins=all_origins, remote=False, limit=limit))
+    emit(jobs.list_jobs(all_origins=all_origins, remote=remote, limit=limit))
+
+
+@jobs_group.command("get")
+@click.argument("job_ids", nargs=-1, required=True)
+@click.option("--remote", is_flag=True, help="Ask the server too (expands batches).")
+def jobs_get(job_ids: tuple[str, ...], remote: bool) -> None:
+    """Status and results of specific jobs."""
+    emit(jobs.get_jobs(list(job_ids), remote=remote))
 
 
 def main(argv: list[str] | None = None) -> int:

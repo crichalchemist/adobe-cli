@@ -12,3 +12,7 @@ def list_jobs(*, all_origins: bool, remote: bool, limit: int) -> dict[str, Any]:
         "jobs.list",
         {"origin": "all" if all_origins else "cli", "limit": limit, "include_remote": remote},
     )
+
+
+def get_jobs(job_ids: list[str], *, remote: bool) -> dict[str, Any]:
+    return bridge.rpc("jobs.get", {"job_ids": job_ids, "include_remote": remote})

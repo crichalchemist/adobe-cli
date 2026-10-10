@@ -9,3 +9,11 @@ from artcraft_cli.utils import bridge
 
 def whoami() -> dict[str, Any]:
     return bridge.rpc("account.session", {})
+
+
+def credits() -> dict[str, Any]:
+    return bridge.rpc("account.credits", {})
+
+
+def subscription() -> dict[str, Any]:
+    return bridge.rpc("account.subscription", {})

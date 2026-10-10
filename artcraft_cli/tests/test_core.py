@@ -193,6 +193,19 @@ SINGLE_OP_COMMANDS: list[tuple[list[str], str, dict[str, Any]]] = [
         "jobs.list",
         {"origin": "all", "limit": 5, "include_remote": False},
     ),
+    (["account", "credits"], "account.credits", {}),
+    (["account", "subscription"], "account.subscription", {}),
+    (
+        ["jobs", "list", "--remote"],
+        "jobs.list",
+        {"origin": "cli", "limit": 50, "include_remote": True},
+    ),
+    (["jobs", "get", "j1"], "jobs.get", {"job_ids": ["j1"], "include_remote": False}),
+    (
+        ["jobs", "get", "j1", "j2", "--remote"],
+        "jobs.get",
+        {"job_ids": ["j1", "j2"], "include_remote": True},
+    ),
 ]
 
 
