@@ -129,3 +129,32 @@ def test_interrupted_multi_file_download_reports_the_files_already_saved(
     assert (code, error["code"]) == (1, "download_failed")
     assert error["details"]["downloaded"] == [str(out_dir / "a1.png")]
     assert sorted(p.name for p in out_dir.iterdir()) == ["a1.png"]
+
+
+def refuse_media_token(
+    fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path, token: str
+) -> None:
+    out_dir = tmp_path / "downloads"
+    out_dir.mkdir()
+    fake_bridge.on(
+        "jobs.get",
+        {"jobs": [finished("j1", (token, "https://cdn.example/x.png"))], "unresolved": []},
+    )
+
+    code, out, _ = run("--json", "jobs", "wait", "j1", "--download", str(out_dir))
+
+    assert (code, error_of(out)["code"]) == (1, "download_failed")
+    assert cdn == []
+    assert list(out_dir.iterdir()) == []
+
+
+def test_media_token_with_nul_byte_is_refused_before_any_download(
+    fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    refuse_media_token(fake_bridge, run, cdn, tmp_path, "a1\x00")
+
+
+def test_media_token_ending_in_part_suffix_is_refused(
+    fake_bridge: FakeBridge, run: Run, cdn: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    refuse_media_token(fake_bridge, run, cdn, tmp_path, "a1.part")

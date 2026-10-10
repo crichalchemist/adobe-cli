@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ def _session() -> requests.Session:
 
 
 MAX_PORT = 65535
+TOKEN_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def read_discovery() -> dict[str, Any]:
@@ -70,6 +72,9 @@ def read_discovery() -> dict[str, Any]:
     port = discovery["port"]
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= MAX_PORT:
         raise CliError("bridge_protocol_error", f"{path} has an invalid port")
+    token = discovery["token"]
+    if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+        raise CliError("bridge_protocol_error", f"{path} has an invalid token")
     if not _pid_alive(pid):
         raise CliError("bridge_not_running", f"ArtCraft pid {pid} is not running")
     return discovery

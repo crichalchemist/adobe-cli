@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +13,6 @@ from artcraft_cli.utils import bridge
 MODALITIES = ("image", "video", "audio", "mesh", "splat")
 PLACEHOLDER_FIELD = "image_media_tokens"
 ESTIMATE_PLACEHOLDER = "mf_estimate_{}"
-MEDIA_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def build_request(
@@ -40,7 +38,7 @@ def build_request(
         if path.is_file():
             media.read_image(path)  # size and type are checked before any RPC
             item: str | Path = path
-        elif MEDIA_TOKEN_RE.match(value):
+        elif media.MEDIA_TOKEN_RE.fullmatch(value):
             item = value
         else:
             raise CliError(

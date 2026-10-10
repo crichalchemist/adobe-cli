@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -77,4 +78,19 @@ def test_malformed_discovery_port_is_reported_as_protocol_error(
         bridge.health()
 
     assert caught.value.code == "bridge_protocol_error"
+    assert fake_bridge.calls == []
+
+
+def test_discovery_token_with_trailing_newline_is_refused_without_echoing_it(
+    fake_bridge: FakeBridge,
+    discovery: Path,
+    run: Callable[..., tuple[int, str, str]],
+) -> None:
+    secret = "cd" * 32
+    write_discovery(discovery, token=secret + "\n")
+
+    code, out, err = run("--json", "ping")
+
+    assert (code, json.loads(out)["error"]["code"]) == (1, "bridge_protocol_error")
+    assert secret not in out + err
     assert fake_bridge.calls == []

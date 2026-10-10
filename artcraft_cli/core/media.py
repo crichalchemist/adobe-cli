@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from artcraft_cli.utils import bridge
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 IMAGE_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
+MEDIA_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def idempotency_token(value: str | None) -> str:
@@ -90,7 +92,7 @@ def plan(media_token: str, cdn_url: str | None, out_dir: Path) -> tuple[str, Pat
     """Check a result file without fetching it; return (cdn_url, its destination path)."""
     if not cdn_url:
         raise CliError("download_failed", f"media {media_token} has no cdn_url")
-    if media_token in ("", ".", "..") or Path(media_token).name != media_token:
+    if not isinstance(media_token, str) or not MEDIA_TOKEN_RE.fullmatch(media_token):
         raise CliError(
             "download_failed",
             "media token is not a plain file name",
