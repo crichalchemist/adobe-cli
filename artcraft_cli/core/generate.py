@@ -38,6 +38,7 @@ def build_request(
             raise CliError("usage_error", f"--media expects FIELD=PATH|TOKEN, got {spec!r}")
         path = Path(value).expanduser()
         if path.is_file():
+            media.read_image(path)  # size and type are checked before any RPC
             item: str | Path = path
         elif MEDIA_TOKEN_RE.match(value):
             item = value
@@ -101,15 +102,14 @@ def run(
     try:
         if download_dir is not None:
             media.prepare_download_dir(download_dir)
-        if _has_local_files(request):
-            raise CliError("usage_error", "local --media files arrive in M3; pass media tokens")
+        resolved = _upload_local_files(request)
         result = bridge.rpc(
             "generate.submit",
             {
                 "modality": modality,
                 "idempotency_token": token,
                 "max_credits": max_credits,
-                "request": request,
+                "request": resolved,
             },
         )
         job_ids = list(result["job_ids"])
@@ -126,10 +126,18 @@ def run(
         raise
 
 
-def _has_local_files(request: dict[str, Any]) -> bool:
-    for value in request.values():
+def _upload_local_files(request: dict[str, Any]) -> dict[str, Any]:
+    """Replace each local Path with the media token of a fresh upload (new uuid4 key each)."""
+    resolved: dict[str, Any] = {}
+    for key, value in request.items():
         if isinstance(value, Path):
-            return True
-        if isinstance(value, list) and any(isinstance(item, Path) for item in value):
-            return True
-    return False
+            resolved[key] = _upload(value)
+        elif isinstance(value, list):
+            resolved[key] = [_upload(item) if isinstance(item, Path) else item for item in value]
+        else:
+            resolved[key] = value
+    return resolved
+
+
+def _upload(path: Path) -> str:
+    return str(media.upload(path, media.idempotency_token(None))["media_token"])

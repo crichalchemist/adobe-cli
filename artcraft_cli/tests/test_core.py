@@ -25,6 +25,7 @@ ESTIMATE = {
     "estimate": {"cost_in_credits": 4, "is_free": False, "is_unlimited": False},
     "effective_credits": 4,
 }
+SUBMITTED = {"job_ids": ["j1"], "idempotency_token": TOKEN_A, "replayed": False}
 
 
 def job(job_id: str, status: str, files: list[str] | None = None) -> dict[str, Any]:
@@ -589,3 +590,44 @@ def test_media_upload_sends_base64_bytes_with_the_given_token(
     assert json.loads(out)["media_token"] == "mf_new"
     (args,) = fake_bridge.args("media.upload")
     assert args == {"content_base64": base64.b64encode(PNG).decode(), "idempotency_token": TOKEN_A}
+
+
+def test_local_media_files_are_uploaded_then_submitted_as_tokens(
+    fake_bridge: FakeBridge, run: Run, tmp_path: Path
+) -> None:
+    image = tmp_path / "ref.png"
+    image.write_bytes(PNG)
+    fake_bridge.on("media.upload", {"media_token": "mf_up1"}, {"media_token": "mf_up2"})
+    fake_bridge.on("generate.submit", SUBMITTED)
+
+    code, _, _ = run(
+        "--json", "generate", "image", "--model", "m", "--max-credits", "5",
+        "--media", f"image_media_tokens={image}", "--media", "image_media_tokens=mf_kept",
+        "--media", f"style_media_token={image}",
+    )  # fmt: skip
+
+    assert code == 0
+    assert fake_bridge.ops() == ["media.upload", "media.upload", "generate.submit"]
+    upload_keys = [args["idempotency_token"] for args in fake_bridge.args("media.upload")]
+    assert len(set(upload_keys)) == 2
+    (submit,) = fake_bridge.args("generate.submit")
+    assert submit["request"]["image_media_tokens"] == ["mf_up1", "mf_kept"]
+    assert submit["request"]["style_media_token"] == "mf_up2"
+
+
+def test_bad_local_reference_is_rejected_before_any_upload(
+    fake_bridge: FakeBridge, run: Run, tmp_path: Path
+) -> None:
+    good, bad = tmp_path / "good.png", tmp_path / "bad.png"
+    good.write_bytes(PNG)
+    bad.write_text("not an image")
+
+    for spend_flags in (["--max-credits", "5"], ["--dry-run"]):
+        code, out, _ = run(
+            "--json", "generate", "image", "--model", "m",
+            "--media", f"image_media_tokens={good}", "--media", f"image_media_tokens={bad}",
+            *spend_flags,
+        )  # fmt: skip
+        assert (code, error_of(out)["code"]) == (1, "upload_type_unsupported")
+
+    assert fake_bridge.calls == []
