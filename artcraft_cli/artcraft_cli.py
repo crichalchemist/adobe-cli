@@ -289,4 +289,6 @@ def _render(err: CliError, as_json: bool) -> int:
         click.echo(f"error[{err.code}]: {err.message}", err=True)
         if payload["error"]["hint"]:
             click.echo(f"hint: {payload['error']['hint']}", err=True)
+        if err.details:
+            click.echo(f"details: {json.dumps(err.details, separators=(',', ':'))}", err=True)
     return 1

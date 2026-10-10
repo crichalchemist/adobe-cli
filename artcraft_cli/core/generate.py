@@ -99,10 +99,12 @@ def run(
 ) -> dict[str, Any]:
     """Submit, then optionally wait and download. Every error echoes the token."""
     job_ids: list[str] | None = None
+    submitting = False
     try:
         if download_dir is not None:
             media.prepare_download_dir(download_dir)
         resolved = _upload_local_files(request)
+        submitting = True
         result = bridge.rpc(
             "generate.submit",
             {
@@ -112,13 +114,35 @@ def run(
                 "request": resolved,
             },
         )
-        job_ids = list(result["job_ids"])
+        submitted = result.get("job_ids")
+        if (
+            not isinstance(submitted, list)
+            or not submitted
+            or not all(isinstance(job_id, str) for job_id in submitted)
+        ):
+            raise CliError("bridge_protocol_error", "generate.submit reply has no job_ids")
+        submitting = False
+        job_ids = list(submitted)
         if wait or download_dir is not None:
             finished = jobs.wait_for_jobs(job_ids, timeout_s=timeout_s)
             result["jobs"] = finished
             if download_dir is not None:
                 result["downloads"] = jobs.download_files(finished, download_dir, force=force)
         return result
+    except KeyboardInterrupt:
+        if submitting:
+            raise CliError(
+                "outcome_unknown",
+                "interrupted while submitting; the job may have been created",
+                {"idempotency_token": token, "reason": "connection_lost"},
+            ) from None
+        if job_ids is not None:
+            raise CliError(
+                "job_wait_timeout",
+                "interrupted after submit; the jobs were created",
+                {"idempotency_token": token, "job_ids": job_ids},
+            ) from None
+        raise  # during local uploads: nothing was spent
     except CliError as err:
         err.details.setdefault("idempotency_token", token)
         if job_ids is not None:

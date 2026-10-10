@@ -28,6 +28,25 @@ def get_jobs(job_ids: list[str], *, remote: bool) -> dict[str, Any]:
     return bridge.rpc("jobs.get", {"job_ids": job_ids, "include_remote": remote})
 
 
+def _checked_seen(job_ids: list[str], *, remote: bool) -> dict[str, Any]:
+    """jobs.get for the wait loop, which indexes the reply; a bad shape is a protocol error."""
+    seen = get_jobs(job_ids, remote=remote)
+    if not (
+        _is_list_of_dicts(seen.get("jobs"), job_id=str, status=str)
+        and _is_list_of_dicts(seen.get("unresolved"), job_id=str, reason=str)
+    ):
+        raise CliError("bridge_protocol_error", "jobs.get reply is malformed")
+    return seen
+
+
+def _is_list_of_dicts(value: Any, **field_types: type) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, dict)
+        and all(isinstance(item.get(name), kind) for name, kind in field_types.items())
+        for item in value
+    )
+
+
 def wait_for_jobs(job_ids: list[str], *, timeout_s: float) -> list[dict[str, Any]]:
     """Poll every 5 s; ask the server at most once a minute, plus one final time."""
     start = time.monotonic()
@@ -36,7 +55,7 @@ def wait_for_jobs(job_ids: list[str], *, timeout_s: float) -> list[dict[str, Any
     while True:
         now = time.monotonic()
         use_remote = finishing or last_remote is None or now - last_remote >= REMOTE_INTERVAL_S
-        seen = get_jobs(job_ids, remote=use_remote)
+        seen = _checked_seen(job_ids, remote=use_remote)
         if use_remote:
             last_remote = now
         _raise_if_failed(seen, after_remote=use_remote)
