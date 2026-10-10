@@ -55,6 +55,10 @@ artcraft-cli --json jobs list --all
 - Errors print `{"error": {"code", "message", "hint", "retryable", "details"?}}` and exit with code 1.
 - [`skills/artcraft-cli/SKILL.md`](skills/artcraft-cli/SKILL.md) lists the full command tree and every error code.
 
+### Interactive shell
+
+`artcraft-cli repl` runs commands without the `artcraft-cli` prefix, for example `--json ping`. Type `exit` or `quit`, or press Ctrl-D, to leave. History lasts for the session only.
+
 ## Spending safety
 
 - `generate` needs exactly one of these:

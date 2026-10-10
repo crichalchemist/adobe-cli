@@ -13,6 +13,7 @@ import click
 from artcraft_cli.core import account, generate, jobs, media, models, settings
 from artcraft_cli.core import app as app_core
 from artcraft_cli.errors import CliError, error_payload
+from artcraft_cli.repl import run_repl
 
 
 def _json_mode() -> bool:
@@ -251,6 +252,12 @@ def settings_get() -> None:
 def settings_set(preference: str, value: str) -> None:
     """Set play_sounds or auto_download."""
     emit(settings.set_preference(preference, value == "true"))
+
+
+@cli.command("repl")
+def repl_cmd() -> None:
+    """Interactive shell: type commands without the `artcraft-cli` prefix."""
+    run_repl(main)
 
 
 def main(argv: list[str] | None = None) -> int:

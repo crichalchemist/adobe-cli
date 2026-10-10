@@ -14,6 +14,8 @@ from typing import Any
 import pytest
 import requests
 
+from artcraft_cli.repl import run_repl
+
 from .conftest import HEALTH, FakeBridge, FakeClock, op_error
 
 Run = Callable[..., tuple[int, str, str]]
@@ -643,3 +645,25 @@ def test_bad_local_reference_is_rejected_before_any_upload(
         assert (code, error_of(out)["code"]) == (1, "upload_type_unsupported")
 
     assert fake_bridge.calls == []
+
+
+# --- REPL (spec §3.6) -------------------------------------------------------------------
+
+
+def test_repl_dispatches_lines_to_commands_and_survives_errors(
+    fake_bridge: FakeBridge, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from artcraft_cli.artcraft_cli import main
+
+    fake_bridge.on("health", HEALTH)
+    fake_bridge.on("app.info", {"artcraft_version": "0.41.0"})
+    lines = iter(["--json ping", "bogus", "'unclosed", "", "--json app info", "quit", "ping"])
+
+    run_repl(main, lambda _prompt: next(lines))
+
+    out, err = capsys.readouterr()
+    pinged, info = out.splitlines()
+    assert json.loads(pinged)["bridge"]["protocol"] == 1
+    assert json.loads(info) == {"artcraft_version": "0.41.0"}
+    assert "error[usage_error]" in err
+    assert fake_bridge.ops() == ["health", "app.info"]
