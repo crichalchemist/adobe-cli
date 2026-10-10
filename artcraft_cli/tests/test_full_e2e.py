@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import subprocess
 import sys
 import uuid
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,23 @@ def cheapest_image_model(capsys: pytest.CaptureFixture[str], *, refs: bool) -> t
     assert priced, f"no image model priced at or under {MAX_CREDITS} credits; refused: {refused}"
     effective, model_id = min(priced)
     return model_id, effective
+
+
+def tiny_png(path: Path) -> Path:
+    """Write a valid 8x8 grey PNG using only the standard library."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    rows = b"".join(b"\x00" + b"\x80" * 8 for _ in range(8))
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+    return path
 
 
 # --- Free ------------------------------------------------------------------------------
@@ -176,3 +195,17 @@ def test_retry_with_returned_token_replays_without_second_charge(
     assert again["job_ids"] == first["job_ids"]
     assert again["replayed_from"] == {"modality": "image", "model": model_id}
     assert cli_json(capsys, "account", "credits")["sum_total_credits"] == balance
+
+
+@spend
+@pytest.mark.spend
+def test_uploaded_image_is_usable_as_generation_reference(
+    live: dict[str, Any], capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    model_id, _ = cheapest_image_model(capsys, refs=True)
+    reference = tiny_png(tmp_path / "ref.png")
+    body = cli_json(
+        capsys, "generate", "image", "--model", model_id, "--prompt", "same, but red",
+        "--media", f"image_media_tokens={reference}", "--max-credits", MAX_CREDITS, "--wait",
+    )  # fmt: skip
+    assert all(job["status"] == "succeeded" for job in body["jobs"])
